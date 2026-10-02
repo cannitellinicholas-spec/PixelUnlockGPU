@@ -83,11 +83,11 @@ class ChatValidationTest {
         assertEquals(400, f.httpStatus)
     }
 
-    @Test fun `tools are rejected explicitly`() {
+    @Test fun `declared tools are accepted and ignored`() {
+        // Agent clients (Grok Build CLI) always advertise tools; the model
+        // just answers in plain text. Rejecting them made the CLI unusable.
         val tools = JsonParser.parseString("""[{"type":"function"}]""")
-        val f = ChatValidation.validate(base().copy(tools = tools))!!
-        assertEquals(400, f.httpStatus)
-        assertEquals("unsupported_feature", f.type)
+        assertNull(ChatValidation.validate(base().copy(tools = tools)))
     }
 
     @Test fun `empty tools array is accepted`() {
@@ -95,8 +95,15 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(req))
     }
 
-    @Test fun `tool_choice auto is rejected`() {
+    @Test fun `tool_choice auto is accepted (model answers in text)`() {
         val req = base().copy(toolChoice = JsonParser.parseString(""""auto""""))
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `forced function tool_choice is rejected`() {
+        val req = base().copy(
+            toolChoice = JsonParser.parseString("""{"type":"function","function":{"name":"f"}}""")
+        )
         val f = ChatValidation.validate(req)!!
         assertEquals("unsupported_feature", f.type)
     }

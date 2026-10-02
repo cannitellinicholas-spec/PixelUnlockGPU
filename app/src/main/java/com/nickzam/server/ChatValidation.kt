@@ -9,9 +9,12 @@ import com.google.gson.JsonElement
  * - `model` must equal a catalog ID exactly; unknown IDs fail explicitly
  *   (never mapped to "the selected model").
  * - Only system/user/assistant text messages, in order, ending in a user turn.
- * - tools/function calling, images, audio, multimodal parts, and `stop` are
- *   rejected with explicit unsupported-feature errors — never silently
- *   ignored.
+ * - `tools` declarations are accepted and ignored: the model can never emit
+ *   `tool_calls`, so clients that always advertise tools (agent CLIs) still
+ *   get plain-text generations. Forced `tool_choice` (anything but `"none"`,
+ *   which the model honors trivially), tool follow-up turns, images, audio,
+ *   multimodal parts, and `stop` remain rejected with explicit
+ *   unsupported-feature errors — never silently ignored.
  * - Sampling knobs are range-checked where the pinned engine implements them
  *   (temperature, top_p, top_k, max_tokens).
  */
@@ -43,14 +46,15 @@ object ChatValidation {
             return Failure(400, "invalid_request_error", "messages must not be empty")
         }
 
-        // Explicitly unsupported request features (MVP is text-only).
-        if (isNonEmpty(req.tools)) {
+        // Declared `tools` are accepted and ignored (like llama.cpp-family
+        // servers): the model can never emit tool_calls, so agent clients
+        // that always advertise tools (Grok Build CLI, etc.) still receive
+        // plain-text generations. What we DO reject is anything that forces
+        // or pretends a tool round-trip the model cannot honor.
+        if (isPresent(req.toolChoice) && !isTrivialToolChoice(req.toolChoice)) {
             return Failure(400, "unsupported_feature",
-                "tools/function calling is not supported by this server")
-        }
-        if (isPresent(req.toolChoice) && !isNoneChoice(req.toolChoice)) {
-            return Failure(400, "unsupported_feature",
-                "tool_choice is not supported by this server")
+                "tool_choice other than \"none\"/\"auto\" forces a tool call " +
+                    "this server can never produce")
         }
         if (isNonEmpty(req.stop)) {
             return Failure(400, "unsupported_feature",
@@ -141,10 +145,26 @@ object ChatValidation {
         return true
     }
 
-    /** `tool_choice: "none"` explicitly disables tools, so it is accepted. */
-    private fun isNoneChoice(el: JsonElement?): Boolean {
-        return el != null && el.isJsonPrimitive && el.asJsonPrimitive.isString &&
-            el.asString.equals("none", ignoreCase = true)
+    /**
+     * A tool_choice the server can honor without ever emitting a tool call:
+     * `"none"` (no tool call expected) and `"auto"` (the model may answer in
+     * plain text, which is all it can do). Anything that *forces* a tool
+     * call — e.g. `{"type":"function",...}` — cannot be honored.
+     */
+    private fun isTrivialToolChoice(el: JsonElement?): Boolean {
+        if (el == null) return false
+        if (el.isJsonPrimitive && el.asJsonPrimitive.isString) {
+            val s = el.asString
+            return s.equals("none", ignoreCase = true) || s.equals("auto", ignoreCase = true)
+        }
+        if (el.isJsonObject) {
+            val type = el.asJsonObject.get("type")
+            if (type != null && type.isJsonPrimitive && type.asJsonPrimitive.isString) {
+                val s = type.asString
+                return s.equals("none", ignoreCase = true) || s.equals("auto", ignoreCase = true)
+            }
+        }
+        return false
     }
 
     private fun isNonEmpty(el: JsonElement?): Boolean {

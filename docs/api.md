@@ -107,9 +107,16 @@ Text chat. Request fields:
 | `top_k` | no | ≥ 1 (default 40) |
 | `max_tokens` | no | 1–32768; `null` lets the bundle decide the KV budget |
 
-Explicitly rejected with 400 `unsupported_feature` (never silently
-ignored): `tools`, `tool_choice` (except `"none"`), `stop`, `image_url` /
-audio / multimodal parts, `tool_calls`, `tool` roles.
+`tools` declarations are accepted and **ignored** (like llama.cpp-family
+servers): the model can never emit `tool_calls`, so agent clients that always
+advertise tools still get plain-text generations. Explicitly rejected with
+400 `unsupported_feature` (never silently ignored): `tool_choice` other than
+`"none"`/`"auto"` (it would force a call the server can't produce), `stop`,
+`image_url` / audio / multimodal parts, `tool_calls`, `tool` roles.
+
+All error bodies are JSON regardless of the client `Accept` header, so
+streaming-only clients (OpenAI SDK, agent CLIs) see the real error instead
+of a bare 406 from content negotiation.
 
 Response headers (set before the first SSE byte): `X-Request-Id`,
 `X-Client-Id`, `X-Queue-Position`, `X-Queue-Depth`, `X-Estimated-Wait-Ms`;

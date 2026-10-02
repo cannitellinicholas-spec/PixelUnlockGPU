@@ -33,11 +33,13 @@ import com.nickzam.server.textChars
 import io.ktor.http.CacheControl
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.cacheControl
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytesWriter
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.utils.io.ByteWriteChannel
@@ -59,7 +61,8 @@ import kotlinx.coroutines.withTimeout
  * `POST /v1/chat/completions` — OpenAI-compatible text chat.
  *
  * Handles request validation (strict: the model must equal the stable ID;
- * tools/images/audio/stop are rejected explicitly), per-client rate
+ * images/audio/stop and forced tool_choice are rejected explicitly, while a
+ * declared `tools` array is accepted and ignored), per-client rate
  * limiting, bounded queue depth, engine acquisition on the catalog-declared
  * backend (no fallback), streaming SSE, non-streaming JSON, and timeout /
  * cancellation cleanup.
@@ -93,13 +96,14 @@ fun Route.chatRoute(
             if (retryAfter != null) {
                 call.response.header("Retry-After", retryAfter.toString())
                 call.response.header("X-RateLimit-Client", clientId)
-                call.respond(
+                call.respondError(
                     HttpStatusCode.TooManyRequests,
                     ErrorResponse(ErrorDetails(
                         message = "Rate limit for client '$clientId' exhausted; retry in ${retryAfter}s.",
                         type = "rate_limit_error",
                         code = 429,
                     )),
+                    gson,
                 )
                 return@post
             }
@@ -110,13 +114,14 @@ fun Route.chatRoute(
         val bodyCap = maxChars.toLong() * 2L + 8_192L
         val contentLength = call.request.headers["Content-Length"]?.toLongOrNull()
         if (contentLength != null && contentLength > bodyCap) {
-            call.respond(
+            call.respondError(
                 HttpStatusCode.PayloadTooLarge,
                 ErrorResponse(ErrorDetails(
                     message = "Request body of $contentLength bytes exceeds cap of $bodyCap",
                     type = "invalid_request_error",
                     code = 413,
                 )),
+                gson,
             )
             return@post
         }
@@ -126,13 +131,14 @@ fun Route.chatRoute(
         } catch (e: Exception) {
             LogManager.e("ChatRoute", "Failed to parse ChatRequest body", e)
             val rootCause = generateSequence(e as Throwable?) { it.cause }.lastOrNull() ?: e
-            call.respond(
+            call.respondError(
                 HttpStatusCode.BadRequest,
                 ErrorResponse(ErrorDetails(
                     message = "Invalid JSON body: ${rootCause.javaClass.simpleName}: ${rootCause.message ?: e.message}",
                     type = "invalid_request_error",
                     code = 400,
                 )),
+                gson,
             )
             return@post
         }
@@ -140,22 +146,24 @@ fun Route.chatRoute(
         // Strict contract validation: unknown model, bad roles/content,
         // unsupported features, invalid sampling. Never silently ignored.
         ChatValidation.validate(req)?.let { failure ->
-            call.respond(
+            call.respondError(
                 HttpStatusCode(failure.httpStatus, "Validation"),
                 ErrorResponse(ErrorDetails(failure.message, failure.type, failure.httpStatus)),
+                gson,
             )
             return@post
         }
 
         val promptChars = req.messages.sumOf { it.textChars() }
         if (promptChars > maxChars) {
-            call.respond(
+            call.respondError(
                 HttpStatusCode.PayloadTooLarge,
                 ErrorResponse(ErrorDetails(
                     message = "Prompt of $promptChars chars exceeds limit of $maxChars",
                     type = "invalid_request_error",
                     code = 413,
                 )),
+                gson,
             )
             return@post
         }
@@ -171,13 +179,14 @@ fun Route.chatRoute(
         )
         if (entry == null) {
             call.response.header("Retry-After", "5")
-            call.respond(
+            call.respondError(
                 HttpStatusCode.TooManyRequests,
                 ErrorResponse(ErrorDetails(
                     message = "Queue full ($maxDepth in flight). Retry shortly.",
                     type = "rate_limit_error",
                     code = 429,
                 )),
+                gson,
             )
             return@post
         }
@@ -234,20 +243,21 @@ fun Route.chatRoute(
                 // already rejects unknown IDs before enqueue).
                 LogManager.e("ChatRoute", "Engine acquire rejected for ${req.model}", e)
                 RequestTracker.markCompleted(entry.id, error = "unknown_model")
-                call.respond(
+                call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorResponse(ErrorDetails(
                         message = e.message ?: "Unknown model",
                         type = "invalid_request_error",
                         code = 400,
                     )),
+                    gson,
                 )
                 return@post
             } catch (e: Throwable) {
                 LogManager.e("ChatRoute", "Engine acquire failed for ${req.model}", e)
                 RequestTracker.markCompleted(entry.id, error = "engine_acquire: ${e.message ?: e.javaClass.simpleName}")
                 val (httpStatus, details) = liteRtAcquireEnvelope(req.model, e)
-                call.respond(httpStatus, RichErrorResponse(details))
+                call.respondError(httpStatus, RichErrorResponse(details), gson)
                 return@post
             }
 
@@ -256,13 +266,14 @@ fun Route.chatRoute(
             } catch (e: IllegalArgumentException) {
                 LogManager.e("ChatRoute", "Session resolve failed for #${entry.id}", e)
                 RequestTracker.markCompleted(entry.id, error = "resolve: ${e.message ?: e.javaClass.simpleName}")
-                call.respond(
+                call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorResponse(ErrorDetails(
                         message = e.message ?: "Invalid request",
                         type = "invalid_request_error",
                         code = 400,
                     )),
+                    gson,
                 )
                 return@post
             }
@@ -328,9 +339,10 @@ fun Route.chatRoute(
                 writeSseError(w, "Inference timeout", "timeout", 408, gson)
             } else {
                 try {
-                    call.respond(
+                    call.respondError(
                         HttpStatusCode.RequestTimeout,
                         ErrorResponse(ErrorDetails("Inference timeout", "timeout", 408)),
+                        gson,
                     )
                 } catch (_: Exception) { /* stream already started */ }
             }
@@ -346,13 +358,14 @@ fun Route.chatRoute(
                 writeSseError(w, e.message ?: "Unknown error", "server_error", 500, gson)
             } else {
                 try {
-                    call.respond(
+                    call.respondError(
                         HttpStatusCode.InternalServerError,
                         ErrorResponse(ErrorDetails(
                             message = e.message ?: "Unknown error",
                             type = "server_error",
                             code = 500,
                         )),
+                        gson,
                     )
                 } catch (_: Exception) { /* stream already started */ }
             }
@@ -455,6 +468,22 @@ private suspend fun writeSseError(
     } catch (_: Exception) {
         /* Defensive: never let error-reporting itself throw out of a catch arm. */
     }
+}
+
+/**
+ * Send an error JSON body through [ApplicationCall.respondText] so it reaches
+ * the client whatever its `Accept` header says. Plain `respond()` routes
+ * through ContentNegotiation, which rejects an `Accept: text/event-stream`
+ * client with a bare 406 — the OpenAI SDK streaming path in Grok Build CLI
+ * (and anything else that always streams) never sees the real error. Raw
+ * text + explicit content type bypasses negotiation entirely.
+ */
+internal suspend fun ApplicationCall.respondError(
+    status: HttpStatusCode,
+    body: Any,
+    gson: Gson,
+) {
+    respondText(gson.toJson(body), ContentType.Application.Json, status)
 }
 
 /**
