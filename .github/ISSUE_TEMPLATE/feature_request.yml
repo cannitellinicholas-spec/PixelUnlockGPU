@@ -1,0 +1,28 @@
+name: Feature request
+description: A new endpoint, backend, setting, or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that the app can't do today?
+      placeholder: >
+        I want to run two clients against one engine without the queue
+        starving the second client, but …
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed shape
+      description: Wire format, setting location, UI placement — rough is fine; we'll refine in thread.
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I checked the MVP exclusions list in the README and docs (CORS, RAG, AICore, etc.) and this isn't an intentional exclusion
+        - label: I'm willing to open a PR for it
+          required: false

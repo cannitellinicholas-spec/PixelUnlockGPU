@@ -1,0 +1,50 @@
+name: Bug report
+description: Something misbehaves — crash, bad output, wrong metric, broken endpoint
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Device + model backend matter a lot here (GPU vs NPU, which Pixel).
+        If the app crashes or the engine fails to load, grab
+        `adb logcat -s LiteRtEngine LiteRtEngineBuilder EngineRegistry SessionManager ChatRoute`
+        if you can — it usually names the cause outright.
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: "Pixel 10 Pro XL, Android 16"
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: From `GET /health` (the `version` field) while the server is running, or the release tag you downloaded.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [GPU, NPU, other/CPU]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened vs what you expected
+      placeholder: >
+        Steps: 1) loaded model on GPU  2) sent a 200-token prompt via /v1/chat/completions
+        with stream=true  3) …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From logcat with the tags above. Double-check for anything personal before posting — logs are pasted as-is.
+      render: shell
+    validations:
+      required: false
