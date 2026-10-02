@@ -239,7 +239,18 @@ private fun healthSnapshot(
             "live_tokens_per_sec" to (cur?.tokensPerSec ?: 0f),
             "live_decode_tokens_per_sec" to (cur?.decodeTokensPerSec ?: 0f),
             "live_prefill_ms" to (cur?.prefillMs),
-            "live_prefill_tokens_per_sec" to (cur?.prefillTokensPerSec ?: 0f),
+            // Live prefill speed, measured from engine-ready (cold build
+            // excluded). 0 while queued or still building the engine.
+            "live_prefill_tokens_per_sec" to (cur?.livePrefillTokensPerSec ?: 0f),
+            // What the in-flight request is doing right now. "generating"
+            // stays as-is for compatibility (true while a request holds the
+            // engine, incl. prefill); phase is the honest breakdown.
+            "phase" to when {
+                cur != null -> cur.phase?.name?.lowercase()
+                com.nickzam.server.RequestTracker.queue.value.isNotEmpty() -> "queued"
+                else -> "idle"
+            },
+            "queue_depth" to com.nickzam.server.RequestTracker.queue.value.size,
             "generating" to (cur != null),
         ),
         "thermal" to if (thermal == null) null else mapOf(

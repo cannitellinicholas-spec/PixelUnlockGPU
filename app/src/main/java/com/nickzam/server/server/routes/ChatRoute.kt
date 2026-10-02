@@ -260,6 +260,10 @@ fun Route.chatRoute(
                 call.respondError(httpStatus, RichErrorResponse(details), gson)
                 return@post
             }
+            // Engine built/warm from here on: the cold build (10-15 s on the
+            // first turn) sits in startedAt→engineReadyAtMs, out of the
+            // prefill window, and the UI shows "starting engine" while it runs.
+            RequestTracker.markEngineReady(entry.id)
 
             val resolvedLocal = try {
                 sessionManager.resolve(req, acquired, temp, topK, topP)

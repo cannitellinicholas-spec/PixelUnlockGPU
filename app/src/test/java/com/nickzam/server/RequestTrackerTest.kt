@@ -111,4 +111,73 @@ class RequestTrackerTest {
             .copy(promptChars = 4_000)
         assertEquals(0f, e.prefillTokensPerSec, 0f)
     }
+
+    // --- engine-build split (regression for "prefill jumps to 111 tok/s
+    // while nothing is generating yet", 2026-10-02) ---
+    // A 12 s cold engine build used to land inside the prefill window, so
+    // prefill tok/s averaged 1-ish on cold starts and the UI showed stale
+    // averages as if live. Phase + engineReadyAtMs make both honest.
+
+    private fun runningEntry(
+        startedAt: Long, engineReadyAtMs: Long?, firstChunkAtMs: Long?, outputChars: Int = 0,
+    ) = streamingEntry(
+        startedAt = startedAt, firstChunkAtMs = firstChunkAtMs,
+        completedAt = startedAt, outputChars = outputChars,
+    ).copy(
+        state = com.nickzam.server.RequestTracker.State.RUNNING,
+        completedAt = null, engineReadyAtMs = engineReadyAtMs,
+    )
+
+    @Test fun `prefill window excludes the engine build`() {
+        // 12 s cold build (0→12_000), then 2_000 est prompt tokens over 16s.
+        val e = streamingEntry(startedAt = 0, firstChunkAtMs = 28_000, completedAt = 30_000, outputChars = 400)
+            .copy(promptChars = 8_000, engineReadyAtMs = 12_000)
+        assertEquals(12_000L, e.engineStartMs)
+        assertEquals(16_000L, e.prefillMs)
+        assertEquals(125f, e.prefillTokensPerSec, 0.01f)
+    }
+
+    @Test fun `entries without an engine stamp fall back to the old window`() {
+        // Back-compat: sessions that never called markEngineReady keep the
+        // startedAt→firstChunk semantics instead of going null.
+        val e = streamingEntry(startedAt = 0, firstChunkAtMs = 8_000, completedAt = 18_000, outputChars = 400)
+        assertNull(e.engineStartMs)
+        assertEquals(8_000L, e.prefillMs)
+    }
+
+    @Test fun `phase reads queued engine-start prefill decode`() {
+        val q = streamingEntry(startedAt = 0, firstChunkAtMs = null, completedAt = 0, outputChars = 0)
+            .copy(state = com.nickzam.server.RequestTracker.State.QUEUED, completedAt = null)
+        assertEquals(com.nickzam.server.RequestTracker.Phase.QUEUED, q.phase)
+        assertEquals(com.nickzam.server.RequestTracker.Phase.ENGINE_START, runningEntry(startedAt = 0, engineReadyAtMs = null, firstChunkAtMs = null).phase)
+        assertEquals(com.nickzam.server.RequestTracker.Phase.PREFILL, runningEntry(startedAt = 0, engineReadyAtMs = 1_000, firstChunkAtMs = null).phase)
+        assertEquals(com.nickzam.server.RequestTracker.Phase.DECODE, runningEntry(startedAt = 0, engineReadyAtMs = 1_000, firstChunkAtMs = 5_000, outputChars = 40).phase)
+    }
+
+    @Test fun `live prefill rate is zero until the engine is ready`() {
+        // Queued or still building: no fake live number.
+        assertEquals(0f, runningEntry(startedAt = 0, engineReadyAtMs = null, firstChunkAtMs = null).livePrefillTokensPerSec, 0f)
+        // Engine ready, first token at 12 s with an 8k-char prompt: 50 tok/s.
+        val e = runningEntry(startedAt = 0, engineReadyAtMs = 4_000, firstChunkAtMs = 12_000)
+            .copy(promptChars = 1_600)
+        assertEquals(50f, e.livePrefillTokensPerSec, 0.01f)
+    }
+
+    @Test fun `markEngineReady stamps once and only the current request`() = runTest {
+        RequestTracker.resetAll()
+        RequestTracker.clearHistory()
+        val e = RequestTracker.enqueue("m", true, 1, 100)
+        RequestTracker.markStarted(e.id)
+        RequestTracker.markEngineReady(e.id)
+        val stamped = RequestTracker.current.value!!
+        assertNotNull(stamped.engineReadyAtMs)
+        // Idempotent: a second call never re-stamps the same request.
+        kotlinx.coroutines.delay(1)
+        RequestTracker.markEngineReady(e.id)
+        assertEquals(stamped.engineReadyAtMs, RequestTracker.current.value!!.engineReadyAtMs)
+        // Unknown id is a no-op.
+        RequestTracker.markEngineReady("nope")
+        assertEquals(stamped.engineReadyAtMs, RequestTracker.current.value!!.engineReadyAtMs)
+        RequestTracker.markCompleted(e.id)
+    }
 }

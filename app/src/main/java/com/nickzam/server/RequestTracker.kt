@@ -32,6 +32,13 @@ object RequestTracker {
 
     enum class State { QUEUED, RUNNING, COMPLETED, ERRORED, CANCELLED }
 
+    /**
+     * What the in-flight request is actually doing, so the UI can say
+     * "queued" / "starting engine" / "prefilling" instead of a blanket
+     * "generating" while nothing has been written yet.
+     */
+    enum class Phase { QUEUED, ENGINE_START, PREFILL, DECODE }
+
     data class Entry(
         val id: String,
         val model: String,
@@ -41,6 +48,14 @@ object RequestTracker {
         val state: State,
         val enqueuedAt: Long,
         val startedAt: Long? = null,
+        /**
+         * Wall-clock ms when the engine was acquired and the session
+         * resolved — i.e. real compute begins. The span
+         * startedAt→engineReadyAtMs is engine build/warm-up (10-15 s on a
+         * cold first turn, ~0 when warm) and is kept OUT of the prefill
+         * window so prompt-eval speed stays honest.
+         */
+        val engineReadyAtMs: Long? = null,
         val completedAt: Long? = null,
         /**
          * Wall-clock ms at which the FIRST output chunk arrived. The span
@@ -103,11 +118,65 @@ object RequestTracker {
                 return (outputTokensEst - 1).toFloat() * 1000f / ms
             }
 
-        /** Prefill (+ cold-engine build, if any): request start → first token. */
+        /**
+         * Prompt-eval window: engine-ready → first token. Falls back to
+         * startedAt for entries that never stamped engine-ready (pre-0.1.5
+         * callers), which folds any cold build back into the window.
+         */
         val prefillMs: Long?
             get() {
+                val ready = engineReadyAtMs ?: startedAt ?: return null
+                return firstChunkAtMs?.minus(ready)
+            }
+
+        /** Wall-clock ms the engine acquire/build took (≈0 when warm). */
+        val engineStartMs: Long?
+            get() {
                 val s = startedAt ?: return null
-                return firstChunkAtMs?.minus(s)
+                val r = engineReadyAtMs ?: return null
+                return (r - s).coerceAtLeast(0L)
+            }
+
+        /**
+         * What the request is doing right now, so UI and /health can say
+         * "queued" / "starting engine" / "prefilling" / "decoding" instead
+         * of a blanket "generating" before any token exists.
+         */
+        val phase: Phase?
+            get() = when {
+                state == State.QUEUED -> Phase.QUEUED
+                state != State.RUNNING -> null
+                engineReadyAtMs == null -> Phase.ENGINE_START
+                firstChunkAtMs == null -> Phase.PREFILL
+                else -> Phase.DECODE
+            }
+
+        /** Elapsed ms in the current phase (drives the UI's ticking counter). */
+        fun phaseElapsedMs(now: Long = System.currentTimeMillis()): Long {
+            val anchor = when (phase) {
+                Phase.QUEUED -> enqueuedAt
+                Phase.ENGINE_START -> startedAt ?: enqueuedAt
+                Phase.PREFILL -> engineReadyAtMs ?: startedAt ?: enqueuedAt
+                Phase.DECODE -> firstChunkAtMs ?: return 0L
+                null -> return 0L
+            }
+            return (now - anchor).coerceAtLeast(0L)
+        }
+
+        /**
+         * Live prefill speed while the prompt is still being evaluated:
+         * prompt tokens over engine-ready → now. A floor while the window is
+         * still growing, exact once the first token lands. Reads 0 until the
+         * engine is ready (a cold build must not masquerade as slow prefill).
+         */
+        val livePrefillTokensPerSec: Float
+            get() {
+                val ready = engineReadyAtMs ?: return 0f
+                val end = firstChunkAtMs ?: System.currentTimeMillis()
+                val ms = (end - ready).coerceAtLeast(0L)
+                if (ms < 100) return 0f
+                val tok = promptChars / 4f
+                return if (tok > 0) tok * 1000f / ms else 0f
             }
 
         /**
@@ -267,6 +336,20 @@ object RequestTracker {
             val entry = q[idx].copy(state = State.RUNNING, startedAt = System.currentTimeMillis())
             _queue.update { it.toMutableList().also { l -> l.removeAt(idx) } }
             _current.update { entry }
+        }
+    }
+
+    /**
+     * Stamp the moment the engine was acquired + session resolved, i.e. the
+     * real compute clock starts. Splitting this from [markStarted] keeps
+     * engine build/warm-up out of the prefill window. No-op if the request
+     * already finished or never started.
+     */
+    fun markEngineReady(id: String) {
+        _current.update { cur ->
+            if (cur != null && cur.id == id && cur.engineReadyAtMs == null)
+                cur.copy(engineReadyAtMs = System.currentTimeMillis())
+            else cur
         }
     }
 

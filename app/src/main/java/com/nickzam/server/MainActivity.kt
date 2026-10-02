@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,7 @@ import com.nickzam.server.download.DownloadStatus
 import com.nickzam.server.download.rememberModelDirSnapshot
 import com.nickzam.server.inference.Sha256
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -140,6 +142,7 @@ private fun NickZamScreen() {
     // tok/s update while generating, not just at completion.
     val reqStats by com.nickzam.server.RequestTracker.stats.collectAsState()
     val reqCurrent by com.nickzam.server.RequestTracker.current.collectAsState()
+    val reqQueue by com.nickzam.server.RequestTracker.queue.collectAsState()
 
     // Poll active downloads + engine state. Keyed on the selected model so
     // the loop re-reads the right file/engine after a switch.
@@ -290,7 +293,7 @@ private fun NickZamScreen() {
                 // thermal APIs (see ThermalMonitor). Real GPU °C shows only
                 // if IThermalService reflection is permitted on this build.
                 ThermalGaugeRow(thermal)
-                ThroughputRow(reqStats, reqCurrent)
+                ThroughputRow(reqStats, reqCurrent, reqQueue)
             }
         }
 
@@ -706,7 +709,20 @@ private fun ThermalGaugeRow(thermal: ThermalMonitor.Snapshot?) {
 private fun ThroughputRow(
     stats: com.nickzam.server.RequestTracker.Stats,
     current: com.nickzam.server.RequestTracker.Entry?,
+    queue: List<com.nickzam.server.RequestTracker.Entry>,
 ) {
+    // Tick once a second while something is in flight so the live phase
+    // elapsed counters move even before any token exists. The loop reads the
+    // StateFlows directly so it never sees a stale key.
+    var phaseNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            phaseNow = System.currentTimeMillis()
+        }
+    }
+    fun elapsed(e: com.nickzam.server.RequestTracker.Entry?): String =
+        ((e?.phaseElapsedMs(phaseNow) ?: 0L) / 1000L).toString()
     // "Since server start" = completed requests + the one in flight.
     val totalChars = stats.totalOutputChars + (current?.outputChars?.toLong() ?: 0L)
     val totalTokensEst = totalChars / 4L
@@ -716,39 +732,65 @@ private fun ThroughputRow(
     // blended tokensPerSec is what a client feels end-to-end.
     val liveDecode = current?.decodeTokensPerSec ?: 0f
     val decodeTps = if (liveDecode > 0f) liveDecode else stats.avgDecodeTokensPerSec
-    val liveTps = current?.tokensPerSec ?: 0f
-    val tps = if (liveTps > 0f) liveTps else stats.avgTokensPerSec
-    val livePrefill = current?.prefillTokensPerSec ?: 0f
-    val prefillTps = if (livePrefill > 0f) livePrefill else stats.avgPrefillTokensPerSec
     val running = current != null
-    val prefillMs = current?.prefillMs
+    val phase = current?.phase
+        ?: if (queue.isNotEmpty()) com.nickzam.server.RequestTracker.Phase.QUEUED else null
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "%.1f tok/s".format(if (decodeTps > 0f) decodeTps else tps),
-                color = if (running) MaterialTheme.colorScheme.primary
+                text = "%.1f tok/s".format(if (liveDecode > 0f) liveDecode else stats.avgDecodeTokensPerSec),
+                color = if (phase == com.nickzam.server.RequestTracker.Phase.DECODE)
+                    MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Bold,
             )
+            // Prefill tok/s is only honest once the whole prompt has been
+            // evaluated (first token landed). Mid-window it's an upper bound
+            // that decays as the denominator grows — reads like a fake
+            // speedometer. While prefilling, the phase text below carries the
+            // elapsed time instead.
+            val prefillTps = when (phase) {
+                com.nickzam.server.RequestTracker.Phase.DECODE ->
+                    maxOf(current?.livePrefillTokensPerSec ?: 0f, 0f)
+                        .takeIf { it > 0f } ?: stats.avgPrefillTokensPerSec
+                null -> stats.avgPrefillTokensPerSec
+                else -> 0f
+            }
+            if (prefillTps > 0f) {
+                Text(
+                    text = "· prefill %.0f tok/s".format(prefillTps),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
-                text = "· prefill %.0f tok/s".format(prefillTps),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                if (running) "· generating" else "· idle (decode avg)",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = when (phase) {
+                    com.nickzam.server.RequestTracker.Phase.QUEUED ->
+                        "· queued ×${queue.size} (${elapsed(queue.first())}s)"
+                    com.nickzam.server.RequestTracker.Phase.ENGINE_START ->
+                        "· starting engine… ${elapsed(current)}s"
+                    com.nickzam.server.RequestTracker.Phase.PREFILL ->
+                        "· prefilling ≈${(current?.promptChars ?: 0) / 4} tok… ${elapsed(current)}s"
+                    com.nickzam.server.RequestTracker.Phase.DECODE ->
+                        "· decoding ${current?.outputTokensEst ?: 0} tok"
+                    null -> if (stats.avgDecodeTokensPerSec > 0f) "· idle (decode avg)" else "· idle"
+                } + if (phase != null && phase != com.nickzam.server.RequestTracker.Phase.QUEUED && queue.isNotEmpty())
+                    " · ${queue.size} waiting" else "",
+                color = if (phase != null && phase != com.nickzam.server.RequestTracker.Phase.QUEUED)
+                    MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        // Prefill (which absorbs a cold-engine build on the first turn) shown
-        // apart from decode so a slow first token reads as warm-up, not a slow
-        // model.
+        // Post-first-token detail line: the warm-up split once it is
+        // measurable. Engine build and prefill read apart from decode so a
+        // slow first token reads as warm-up, not a slow model.
+        val prefillMs = current?.prefillMs
+        val engineMs = current?.engineStartMs
         if (prefillMs != null && prefillMs > 0) {
             Text(
-                "first token in %.1fs (prefill%s) · decode %.1f tok/s · e2e %.1f tok/s".format(
+                "first token: engine %.1fs + prefill %.1fs · decode %.1f tok/s".format(
+                    (engineMs ?: 0L) / 1000f,
                     prefillMs / 1000f,
-                    if (decodeTps > 0f) "" else " warming",
-                    decodeTps,
-                    tps,
+                    liveDecode,
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
