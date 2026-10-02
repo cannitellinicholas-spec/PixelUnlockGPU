@@ -94,4 +94,21 @@ class RequestTrackerTest {
         val e = streamingEntry(startedAt = 0, firstChunkAtMs = 8_000, completedAt = 18_000, outputChars = 4)
         assertNull(e.decodeWindowMs)
     }
+
+    // --- prefill tok/s counter (UI side-by-side with decode) ---
+
+    @Test fun `prefill rate is prompt tokens over the prefill window`() {
+        // promptChars=4000 → 1000 est tokens; first chunk at 8s → 125 tok/s.
+        val e = streamingEntry(startedAt = 0, firstChunkAtMs = 8_000, completedAt = 18_000, outputChars = 400)
+            .copy(promptChars = 4_000)
+        assertEquals(125f, e.prefillTokensPerSec, 0.01f)
+    }
+
+    @Test fun `tiny prefill windows read unmeasurable`() {
+        // Sub-100ms window (non-streaming completion stamps first≈start) must
+        // return 0 rather than an absurd rate.
+        val e = streamingEntry(startedAt = 0, firstChunkAtMs = 20, completedAt = 18_000, outputChars = 400)
+            .copy(promptChars = 4_000)
+        assertEquals(0f, e.prefillTokensPerSec, 0f)
+    }
 }

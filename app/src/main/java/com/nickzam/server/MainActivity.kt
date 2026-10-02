@@ -718,6 +718,8 @@ private fun ThroughputRow(
     val decodeTps = if (liveDecode > 0f) liveDecode else stats.avgDecodeTokensPerSec
     val liveTps = current?.tokensPerSec ?: 0f
     val tps = if (liveTps > 0f) liveTps else stats.avgTokensPerSec
+    val livePrefill = current?.prefillTokensPerSec ?: 0f
+    val prefillTps = if (livePrefill > 0f) livePrefill else stats.avgPrefillTokensPerSec
     val running = current != null
     val prefillMs = current?.prefillMs
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -727,6 +729,10 @@ private fun ThroughputRow(
                 color = if (running) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "· prefill %.0f tok/s".format(prefillTps),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 if (running) "· generating" else "· idle (decode avg)",

@@ -110,6 +110,19 @@ object RequestTracker {
                 return firstChunkAtMs?.minus(s)
             }
 
+        /**
+         * Prompt-eval speed: prompt tokens (estimated ~4 chars/token) over the
+         * prefill window. Like decode tok/s it needs a measurable window; the
+         * first-token latency also absorbs any cold-engine build, so the
+         * number is a floor for prefill on cold starts, exact when warm.
+         */
+        val prefillTokensPerSec: Float
+            get() {
+                val ms = prefillMs?.takeIf { it >= 100 } ?: return 0f
+                val tok = promptChars / 4f
+                return if (tok > 0) tok * 1000f / ms else 0f
+            }
+
         /** Chunks per second, computed only when we have a completed duration. */
         val chunksPerSec: Float
             get() {
@@ -133,6 +146,10 @@ object RequestTracker {
         val totalDecodeMs: Long = 0,
         /** Sum of tokens generated after the first token, same set. */
         val totalDecodeTokensEst: Long = 0,
+        /** Sum of prefill-window ms (start → first token) over completed requests. */
+        val totalPrefillMs: Long = 0,
+        /** Sum of prompt tokens estimated over those same prefill windows. */
+        val totalPrefillTokensEst: Long = 0,
     ) {
         val avgLatencyMs: Long
             get() = if (totalCompleted > 0) totalInferenceMs / totalCompleted else 0L
@@ -162,6 +179,16 @@ object RequestTracker {
         val avgDecodeTokensPerSec: Float
             get() = if (totalDecodeMs > 0 && totalDecodeTokensEst > 0)
                 totalDecodeTokensEst.toFloat() * 1000f / totalDecodeMs else 0f
+
+        /**
+         * Prompt-eval speed across completed requests: estimated prompt tokens
+         * over each request's prefill window (start → first token). Because a
+         * cold-engine build can land in that window, this is a floor for true
+         * prefill speed; on warm turns (engine + KV cache reused) it is exact.
+         */
+        val avgPrefillTokensPerSec: Float
+            get() = if (totalPrefillMs > 0 && totalPrefillTokensEst > 0)
+                totalPrefillTokensEst.toFloat() * 1000f / totalPrefillMs else 0f
     }
 
     private const val HISTORY_CAP = 50
@@ -367,6 +394,7 @@ object RequestTracker {
     private fun bumpStats(entry: Entry) {
         val infMs = entry.inferenceMs()
         val decodeMs = if (entry.state == State.COMPLETED) entry.decodeWindowMs else null
+        val prefillMs = if (entry.state == State.COMPLETED) entry.prefillMs?.takeIf { it >= 100 } else null
         _stats.update { s ->
             s.copy(
                 totalCompleted = s.totalCompleted + if (entry.state == State.COMPLETED) 1 else 0,
@@ -378,6 +406,9 @@ object RequestTracker {
                 totalDecodeMs = s.totalDecodeMs + (decodeMs ?: 0L),
                 totalDecodeTokensEst = s.totalDecodeTokensEst +
                     (if (decodeMs != null) entry.outputTokensEst - 1 else 0L),
+                totalPrefillMs = s.totalPrefillMs + (prefillMs ?: 0L),
+                totalPrefillTokensEst = s.totalPrefillTokensEst +
+                    (if (prefillMs != null) entry.promptChars / 4L else 0L),
             )
         }
     }

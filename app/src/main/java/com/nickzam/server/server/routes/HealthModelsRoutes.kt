@@ -235,9 +235,11 @@ private fun healthSnapshot(
             // the number comparable to published GPU tok/s figures.
             "avg_tokens_per_sec" to stats.avgTokensPerSec,
             "avg_decode_tokens_per_sec" to stats.avgDecodeTokensPerSec,
+            "avg_prefill_tokens_per_sec" to stats.avgPrefillTokensPerSec,
             "live_tokens_per_sec" to (cur?.tokensPerSec ?: 0f),
             "live_decode_tokens_per_sec" to (cur?.decodeTokensPerSec ?: 0f),
             "live_prefill_ms" to (cur?.prefillMs),
+            "live_prefill_tokens_per_sec" to (cur?.prefillTokensPerSec ?: 0f),
             "generating" to (cur != null),
         ),
         "thermal" to if (thermal == null) null else mapOf(

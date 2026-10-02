@@ -41,7 +41,13 @@ object Settings {
     const val DEFAULT_TEMPERATURE = 0.8f
     const val DEFAULT_TOP_K = 40
     const val DEFAULT_TOP_P = 0.95f
-    const val DEFAULT_REQUEST_TIMEOUT_MS = 120_000L
+    /**
+     * Per-request generation fuse. Queued requests do NOT count against it
+     * (it arms at inference start), but a 32k-context turn on the phone GPU
+     * legitimately runs multi minutes; 120s beheaded queued agent-CLI turns
+     * mid-stream (observed 2026-10-02 with two clients hammering one slot).
+     */
+    const val DEFAULT_REQUEST_TIMEOUT_MS = 300_000L
     const val DEFAULT_MAX_QUEUE_DEPTH = 8
     const val DEFAULT_MAX_PROMPT_CHARS = 100_000
     const val DEFAULT_CONTEXT_TOKENS = 32_768
