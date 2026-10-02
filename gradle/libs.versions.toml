@@ -1,0 +1,41 @@
+[versions]
+# Pinned compatibility set — see docs/device-model-matrix.md. Do not float.
+agp = "8.7.3"
+kotlin = "2.2.21"
+coreKtx = "1.12.0"
+lifecycleRuntimeKtx = "2.8.6"
+activityCompose = "1.9.2"
+composeBom = "2024.09.02"
+ktor = "3.4.3"
+litertlm = "0.12.0"
+junit = "4.13.2"
+coroutinesTest = "1.7.3"
+robolectric = "4.13"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
+
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
+ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
+ktor-serialization-gson = { module = "io.ktor:ktor-serialization-gson", version.ref = "ktor" }
+
+litertlm-android = { module = "com.google.ai.edge.litertlm:litertlm-android", version.ref = "litertlm" }
+
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutinesTest" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+
+[plugins]
+androidApplication = { id = "com.android.application", version.ref = "agp" }
+kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlinCompose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

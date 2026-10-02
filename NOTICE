@@ -1,0 +1,64 @@
+PixelUnlockGPU
+Copyright 2026 Nicholas Cannitelli
+
+This product includes software developed as part of the PixelUnlockGPU
+project, licensed under the Apache License, Version 2.0.
+
+================================================================================
+Third-party attribution
+================================================================================
+
+1. localllm
+   Copyright of the respective contributors of mlnomadpy/localllm
+   https://github.com/mlnomadpy/localllm
+   (commit 761bc94cba5eb176edfd814531da8edf17b76443)
+
+   Portions of this product are derived from or based on localllm, which the
+   upstream project declares as licensed under the Apache License, Version 2.0
+   (see the README "License" section of that repository). Files derived from
+   localllm carry a header comment identifying the upstream file. The upstream
+   repository does not ship a LICENSE file; the canonical Apache 2.0 text is
+   reproduced in this repository's LICENSE file, and attribution is made here
+   in the spirit of Section 4 of that license.
+
+2. Box
+   Copyright 2026 Jesse Li-Yates
+   https://github.com/jegly/Box
+   (upstream cross-check commit aaa0bb22a89078b827b46a055f61ba306fc19b57;
+   direct reference: jmahatpure01/Box_with_API, commit
+   fe6485c8aa134fc4f435c00ad1d0fb8ac812d8a5)
+
+   This product uses model/runtime knowledge (artifact coordinates, Tensor G5
+   NPU backend setup) documented by Box, which is licensed under the Apache
+   License, Version 2.0 (full text in that repository's LICENSE file).
+
+3. libLiteRtDispatch_GoogleTensor.so (redistributed binary, prebuilt)
+   app/src/main/jniLibs/arm64-v8a/libLiteRtDispatch_GoogleTensor.so
+   Copyright of the respective contributors of jegly/Box (Apache 2.0).
+   Byte-identical copies are shipped by both jegly/Box and
+   jmahatpure01/Box_with_API (SHA-256
+   5731f46e9ac6e016113524a7a15fe9feb7bb55e03a0ce1c1b9aee7d5aab46fad;
+   409,920 bytes), so the Apache 2.0 grant in Box's LICENSE covers this
+   redistribution. See docs/device-model-matrix.md section 7.
+
+4. Model weights (NOT redistributed)
+   Gemma models are downloaded at runtime from Hugging Face by the user and
+   are governed by Google's Gemma Terms of Use:
+   https://ai.google.dev/gemma/terms
+   No model weights are bundled with or distributed in this repository.
+
+5. Runtime dependencies (linked, not derived)
+   LiteRT-LM (Google, Apache 2.0), Kotlin (JetBrains, Apache 2.0),
+   Ktor (JetBrains, Apache 2.0), Jetpack Compose / AndroidX (Google,
+   Apache 2.0), Gson (Google, Apache 2.0), Netty (Apache 2.0).
+
+================================================================================
+Marking of modifications (Apache 2.0 Section 4(b))
+================================================================================
+
+Every source file derived from localllm begins with a comment of the form:
+
+  // Portions of this file are derived from localllm
+  // (https://github.com/mlnomadpy/localllm), Copyright the localllm
+  // contributors, licensed under the Apache License, Version 2.0.
+  // Modifications by Nicholas Cannitelli, 2026.

@@ -1,0 +1,10 @@
+# Gradle / Android build outputs
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.DS_Store
+# Signing secrets are never committed; see app/build.gradle.kts.
+*.jks
+*.keystore

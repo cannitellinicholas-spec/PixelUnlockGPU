@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PixelUnlockGPU</string>
+    <string name="app_title">PixelUnlockGPU TPU Server</string>
+
+    <string name="notif_channel_name">PixelUnlockGPU server</string>
+    <string name="notif_title">PixelUnlockGPU server running</string>
+    <string name="notif_listening">Listening on %1$s:%2$d</string>
+    <string name="notif_action_stop">Stop</string>
+</resources>
