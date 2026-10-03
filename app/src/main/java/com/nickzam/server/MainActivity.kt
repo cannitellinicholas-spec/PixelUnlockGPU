@@ -109,6 +109,7 @@ private fun NickZamScreen() {
     var apiKeyText by remember { mutableStateOf(Settings.apiKey(context)) }
     var bindLan by remember { mutableStateOf(Settings.bindLan(context)) }
     var tailscaleOn by remember { mutableStateOf(Settings.tailscale(context)) }
+    var specOn by remember { mutableStateOf(Settings.specDecoding(context)) }
     val accessLabel by ServerState.accessLabel.collectAsState()
     var busy by remember { mutableStateOf<String?>(null) }
     var verifyNote by remember { mutableStateOf<String?>(null) }
@@ -539,6 +540,32 @@ private fun NickZamScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Speculative decoding")
+                        Text(
+                            "Drafts several tokens ahead and verifies them in one weight " +
+                                "pass, so decode can exceed one weight-read per token. Only " +
+                                "models with \"+ draft\" in the name support it — the flag " +
+                                "does nothing elsewhere. Costs extra RAM; the speedup depends " +
+                                "on how predictable the text is. Switching rebuilds the engine " +
+                                "on the next request.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = specOn,
+                        onCheckedChange = {
+                            specOn = it
+                            Settings.setSpecDecoding(context, it)
+                        },
+                    )
+                }
             }
         }
 

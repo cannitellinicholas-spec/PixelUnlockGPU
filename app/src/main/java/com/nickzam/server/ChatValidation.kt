@@ -60,6 +60,19 @@ object ChatValidation {
             return Failure(400, "unsupported_feature",
                 "stop sequences are not supported by the pinned inference engine")
         }
+        // Speculative decoding is a property of the bundle (MTP drafter
+        // section). Requesting it on a drafter-less model can never be
+        // honored — reject explicitly (never silently drop the request's
+        // intent). `false`/absent always passes; `true` on a drafter model
+        // is honored at engine level.
+        if (req.speculativeDecoding == true) {
+            val info = findModelInfo(req.model)
+            if (info != null && !info.speculativeDecoding) {
+                return Failure(400, "unsupported_feature",
+                    "model '${req.model}' has no MTP drafter section; " +
+                        "speculative_decoding requires \"${GPU_SPEC_MODEL_ID}\"")
+            }
+        }
 
         // Roles and content, in order.
         for ((i, m) in req.messages.withIndex()) {

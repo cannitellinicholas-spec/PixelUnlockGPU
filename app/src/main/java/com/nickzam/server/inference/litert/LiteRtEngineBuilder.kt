@@ -6,8 +6,11 @@
 package com.nickzam.server.inference.litert
 
 import com.google.ai.edge.litertlm.Backend as LiteRtBackend
+import com.google.ai.edge.litertlm.Capabilities as LiteRtCapabilities
 import com.google.ai.edge.litertlm.Engine as LiteRtNativeEngine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.ExperimentalFlags
 import com.nickzam.server.Backend
 import com.nickzam.server.LogManager
 import java.io.File
@@ -32,11 +35,13 @@ import java.io.File
  */
 object LiteRtEngineBuilder {
 
+    @OptIn(ExperimentalApi::class)
     fun build(
         modelFile: File,
         maxTokens: Int?,
         backend: Backend,
         nativeLibDir: String,
+        speculativeDecoding: Boolean = false,
     ): LiteRtNativeEngine {
         if (TensorSoCDetector.isTensorSoc() &&
             !isTensorG5() &&
@@ -44,8 +49,30 @@ object LiteRtEngineBuilder {
         ) {
             primeTensorJniState(modelFile, nativeLibDir)
         }
+        // Library-global opt-in, read at engine init. Reset unconditionally
+        // per build so a spec-enabled engine can't leak the flag into the
+        // next (non-drafter) engine after a model switch. The native side
+        // tolerates the flag on drafter-less bundles (it logs and runs
+        // baseline), but the catalog is the source of truth — don't request
+        // it where the bundle has no drafter.
+        ExperimentalFlags.enableSpeculativeDecoding = speculativeDecoding
         val native = backend.toLiteRt(nativeLibDir)
         return buildOne(modelFile, maxTokens, native)
+    }
+
+    /**
+     * Cross-check [speculativeDecoding] (catalog truth) against what the
+     * runtime + bundle actually support, so /health can report the ACTUAL
+     * state. Capabilities opens the bundle metadata read-only.
+     */
+    fun speculativeDecodingActive(modelFile: File, catalogDeclared: Boolean): Boolean {
+        if (!catalogDeclared) return false
+        return try {
+            LiteRtCapabilities(modelFile.absolutePath).use { it.hasSpeculativeDecodingSupport() }
+        } catch (e: Exception) {
+            LogManager.w("LiteRtEngineBuilder", "Capabilities probe failed: ${e.message}")
+            false
+        }
     }
 
     private fun Backend.toLiteRt(nativeLibDir: String): LiteRtBackend = when (this) {

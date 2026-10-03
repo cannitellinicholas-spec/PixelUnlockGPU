@@ -150,7 +150,7 @@ class EngineRegistry(
      * fallback; init failures propagate verbatim and are retained for
      * `/health`.
      */
-    fun acquire(modelId: String, maxTokens: Int?): AcquiredEngine.LiteRt {
+    fun acquire(modelId: String, maxTokens: Int?, specOverride: Boolean? = null): AcquiredEngine.LiteRt {
         val info = resolveModelInfo(modelId)
         // Context window is a user-tunable KV-cache budget (see
         // Settings.contextTokens). It is part of the engine key, so each
@@ -158,7 +158,14 @@ class EngineRegistry(
         // builds at the new size. Defaults to the 32k ceiling.
         val kvBudget = com.nickzam.server.Settings.contextTokens(appContext)
             .coerceAtMost(KV_BUDGET_TOKENS)
-        val cacheKey = EngineKey(info.id, kvBudget, info.backend)
+        // Effective spec flag. A per-request `speculative_decoding` overrides
+        // the Settings toggle; ChatValidation already rejected `true` on a
+        // drafter-less model, so the final AND with the catalog flag is a
+        // belt-and-braces guard for non-HTTP callers. Part of the engine key
+        // (the flag is read once at engine init).
+        val wantSpec = specOverride ?: com.nickzam.server.Settings.specDecoding(appContext)
+        val spec = wantSpec && info.speculativeDecoding
+        val cacheKey = EngineKey(info.id, kvBudget, info.backend, spec)
         liteRtEngines.get(cacheKey)?.let {
             return AcquiredEngine.LiteRt(it.engine, cacheKey, it.attempts)
         }
@@ -220,7 +227,15 @@ class EngineRegistry(
         // building for a different model, drop every cached engine of other
         // models. Conversations tied to them are torn down first via
         // [onLiteRtEvicted]. Same-model entries (other KV budgets) still
-        // ride the LRU.
+        // ride the LRU — EXCEPT spec-flag variants of the requested model:
+        // two 3.6 GB engines for one model would blow working memory, and
+        // the flag can't share an engine anyway (read once at init).
+        val staleSpec = liteRtEngines.snapshot().keys
+            .filter { it.modelId == info.id && it.spec != spec }
+        if (staleSpec.isNotEmpty()) {
+            LogManager.i("EngineRegistry", "Rebuilding ${info.id} (spec=$spec): dropping ${staleSpec.size} engine(s) with the other flag")
+            staleSpec.forEach { liteRtEngines.remove(it) }
+        }
         val otherModels = liteRtEngines.snapshot().keys.filter { it.modelId != info.id }
         if (otherModels.isNotEmpty()) {
             LogManager.i("EngineRegistry", "Switching to ${info.id}: evicting ${otherModels.size} engine(s) of other models")
@@ -230,7 +245,7 @@ class EngineRegistry(
         val nativeLibDir = appContext.applicationInfo.nativeLibraryDir.orEmpty()
         val t0 = System.nanoTime()
         val native = try {
-            LiteRtEngineBuilder.build(modelFile, kvBudget, info.backend, nativeLibDir)
+            LiteRtEngineBuilder.build(modelFile, kvBudget, info.backend, nativeLibDir, spec)
         } catch (e: Exception) {
             val ms = (System.nanoTime() - t0) / 1_000_000
             val msg = "Failed to initialize ${info.backend.name} engine for ${info.id}: " +

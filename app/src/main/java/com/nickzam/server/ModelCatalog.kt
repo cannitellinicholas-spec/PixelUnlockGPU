@@ -31,6 +31,24 @@ const val STABLE_MODEL_ID = "gemma-4-e2b-it-tpu-g5"
 const val GPU_MODEL_ID = "gemma-4-e4b-it-gpu"
 
 /**
+ * E4B standard bundle on the GPU backend, with the bundled MTP drafter
+ * section: speculative decoding drafts several tokens ahead and the target
+ * model verifies them in one pass, so decode no longer pays a full
+ * weight-stream per token. Google's own model-card numbers for this exact
+ * file on GPU (S26 Ultra): 21.9 → 46–49 tok/s decode.
+ */
+const val GPU_SPEC_MODEL_ID = "gemma-4-e4b-it-gpu-spec"
+
+/**
+ * The one real community int4 `.litertlm` found (UrielSalto's re-quant of
+ * Gemma 4 E2B). CPU-format only — no GPU-artisan section, so it runs on
+ * the CPU backend. Unofficial artifact: the app pins commit + SHA-256 so
+ * the exact bytes audited are the bytes loaded; weights remain Gemma under
+ * the Gemma Terms of Use.
+ */
+const val INT4_CPU_MODEL_ID = "gemma-4-e2b-it-int4-cpu"
+
+/**
  * Metadata for the served model bundle: stable public ID, artifact hash,
  * compatible SoC, backend, context limit, download metadata, license notice.
  */
@@ -67,6 +85,14 @@ data class ModelInfo(
     val expectedSizeBytes: Long? = null,
     /** Source/license notice surfaced in UI and docs. */
     val licenseNotice: String = "",
+    /**
+     * True when this bundle ships a `tf_lite_mtp_drafter` section and the
+     * engine layer should attempt speculative decoding. Declared here (not
+     * probed from the file) so the catalog stays the single source of truth;
+     * the runtime additionally verifies support via Capabilities and only
+     * claims it when both agree.
+     */
+    val speculativeDecoding: Boolean = false,
 )
 
 /**
@@ -170,6 +196,51 @@ val AVAILABLE_MODELS: List<ModelInfo> = listOf(
         expectedSizeBytes = 2_969_059_328L,
         licenseNotice = "Gemma Terms of Use: https://ai.google.dev/gemma/terms. " +
             "Artifact: litert-community/gemma-4-E4B-it-litert-lm @ 2eee7ac.",
+    ),
+    ModelInfo(
+        id = GPU_SPEC_MODEL_ID,
+        name = "Gemma 4 E4B + draft (GPU)",
+        description = "The standard E4B bundle (3.66 GB) running on the GPU with " +
+            "speculative decoding: a multi-token-prediction drafter proposes " +
+            "several tokens ahead and the model verifies them in one weight " +
+            "pass, so decode speed is no longer capped at one full weight " +
+            "read per token. ~1.5-2x decode in Google's own GPU benchmarks " +
+            "for this file; actual gain depends on how predictable the text " +
+            "is. Needs ~3.7 GB free storage and more RAM while loaded.",
+        url = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm" +
+            "/resolve/2eee7ac325f20eb8c9ac1d0e972f7c84663062da/gemma-4-E4B-it.litertlm",
+        filename = "gemma-4-e4b-it-spec.litertlm",
+        backend = Backend.LITERT_GPU,
+        // LFS sha256 at the pinned commit; verified fail-closed before load.
+        sha256 = "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
+        requiredSocMarker = null,
+        contextTokens = null,
+        expectedSizeBytes = 3_659_530_240L,
+        licenseNotice = "Gemma Terms of Use: https://ai.google.dev/gemma/terms. " +
+            "Artifact: litert-community/gemma-4-E4B-it-litert-lm @ 2eee7ac.",
+        speculativeDecoding = true,
+    ),
+    ModelInfo(
+        id = INT4_CPU_MODEL_ID,
+        name = "Gemma 4 E2B int4 (CPU)",
+        description = "int4-quantized Gemma 4 E2B in LiteRT-LM CPU format — " +
+            "2.56 GB of weights (vs 2.97 GB for the GPU E4B). Smaller AND a " +
+            "smaller model, but this artifact is CPU-delegate only (no GPU " +
+            "section), so expect lower decode speed than the GPU entries. " +
+            "Community re-quant (UrielSalto): unofficial artifact, verified " +
+            "byte-for-byte against the pinned hash; output quality vs the " +
+            "official quants has not been benchmarked here.",
+        url = "https://huggingface.co/UrielSalto/gemma-4-e2b-it-int4-litert-lm" +
+            "/resolve/652d52eb3599a29c88156d468de6072d2545cd5b/model.litertlm",
+        filename = "gemma-4-e2b-it-int4.litertlm",
+        backend = Backend.LITERT_CPU,
+        // LFS sha256 at the pinned commit; verified fail-closed before load.
+        sha256 = "50db55a621e9319e0ac52bd5ec9b6e9534ddc651946708ff599967c8fc91a939",
+        requiredSocMarker = null,
+        contextTokens = null,
+        expectedSizeBytes = 2_556_483_760L,
+        licenseNotice = "Gemma Terms of Use: https://ai.google.dev/gemma/terms. " +
+            "Artifact: UrielSalto/gemma-4-e2b-it-int4-litert-lm @ 652d52e.",
     ),
 )
 

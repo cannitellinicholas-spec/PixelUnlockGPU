@@ -12,8 +12,8 @@ android {
         applicationId = "com.nickzam.server"
         minSdk = 29
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
         // SHA-256 of the pinned model artifact (docs/device-model-matrix.md).
         // Fail-closed: a mismatch refuses the load. Updated by the Gate 0
         // audit; any artifact change must update this and re-run the gate.

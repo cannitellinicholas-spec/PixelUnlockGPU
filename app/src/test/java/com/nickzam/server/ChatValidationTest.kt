@@ -23,6 +23,25 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(base()))
     }
 
+    @Test fun `speculative decoding true on a drafter model passes`() {
+        assertNull(ChatValidation.validate(
+            base().copy(model = GPU_SPEC_MODEL_ID, speculativeDecoding = true)))
+    }
+
+    @Test fun `speculative decoding true on a drafter-less model is rejected`() {
+        val f = ChatValidation.validate(base().copy(speculativeDecoding = true))!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("unsupported_feature", f.type)
+        assertTrue(f.message.contains(GPU_SPEC_MODEL_ID))
+    }
+
+    @Test fun `speculative decoding false or absent always passes`() {
+        assertNull(ChatValidation.validate(base().copy(speculativeDecoding = false)))
+        assertNull(ChatValidation.validate(base().copy(speculativeDecoding = null)))
+        assertNull(ChatValidation.validate(
+            base().copy(model = GPU_SPEC_MODEL_ID, speculativeDecoding = false)))
+    }
+
     @Test fun `valid request with system prompt and sampling passes`() {
         val req = base().copy(
             messages = listOf(msg("system", "Be brief"), msg("user", "Hi")),

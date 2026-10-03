@@ -200,6 +200,11 @@ private fun healthSnapshot(
             "sha256_prefix" to info.sha256.take(16),
             // Verified context limit only; null = unverified (see manifest).
             "context_tokens" to info.contextTokens,
+            // Drafter support = catalog declaration AND a live engine built
+            // with the spec flag (engines with the other flag are evicted).
+            "spec_capable" to info.speculativeDecoding,
+            "spec_active" to (info.speculativeDecoding &&
+                snapshot.any { it.cacheKey.startsWith("${info.id}_") && it.cacheKey.endsWith("_spec") }),
         )
     }
     val selectedId = com.nickzam.server.Settings.selectedModelId(appContext)
@@ -278,6 +283,9 @@ private fun healthSnapshot(
             "litert_version" to BuildConfig.LITERT_VERSION,
             "loaded_count" to engineRegistry.engineCount(),
             "last_load_error" to engineRegistry.lastLoadError,
+            // User opt-in for speculative decoding; only meaningful when the
+            // selected model's models[].spec_capable is true (see models[]).
+            "spec_decoding_setting" to com.nickzam.server.Settings.specDecoding(appContext),
         ),
         "engines" to snapshot.map { e ->
             mapOf(

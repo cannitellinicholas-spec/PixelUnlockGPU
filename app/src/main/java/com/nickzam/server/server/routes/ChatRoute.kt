@@ -237,7 +237,7 @@ fun Route.chatRoute(
             // Acquire + resolve are serialized by the outer inferenceMutex
             // but sit outside the timeout (timeout covers generation only).
             val acquired = try {
-                engineRegistry.acquire(req.model, req.maxTokens)
+                engineRegistry.acquire(req.model, req.maxTokens, req.speculativeDecoding)
             } catch (e: IllegalArgumentException) {
                 // Strict model resolution (defense in depth — validation
                 // already rejects unknown IDs before enqueue).

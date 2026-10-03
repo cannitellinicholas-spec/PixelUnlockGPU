@@ -173,6 +173,13 @@ data class ChatRequest(
      * support (verified against the AAR), so any presence is rejected.
      */
     val stop: JsonElement? = null,
+    /**
+     * Per-request speculative-decoding override. `true` is accepted only for
+     * models whose bundle ships a drafter (rejected otherwise); when absent
+     * the Settings toggle decides. Drafting is engine-level (set at engine
+     * init), so a `true` here can share or force a spec-keyed engine.
+     */
+    @SerializedName("speculative_decoding") val speculativeDecoding: Boolean? = null,
 )
 
 data class ChatResponse(
