@@ -78,19 +78,27 @@ class MainActivity : ComponentActivity() {
         ) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        // Launched from Cadence's right-edge drawer ("Server settings")?
+        // Show a one-tap way back so nobody has to hunt through the launcher.
+        val fromCadence = intent?.getBooleanExtra(EXTRA_FROM_CADENCE, false) == true
         setContent {
             NickZamTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    NickZamScreen()
+                    NickZamScreen(fromCadence = fromCadence)
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_FROM_CADENCE = "com.nickzam.server.extra.FROM_CADENCE"
+        const val CADENCE_PACKAGE = "com.pixelgpu.chat"
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NickZamScreen() {
+private fun NickZamScreen(fromCadence: Boolean = false) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val status by ServerState.status.collectAsState()
@@ -227,7 +235,25 @@ private fun NickZamScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("PixelServer", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("PixelServer", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            if (fromCadence) {
+                // Only shown when Cadence launched us — a one-tap return.
+                OutlinedButton(
+                    onClick = {
+                        val back = context.packageManager
+                            .getLaunchIntentForPackage(MainActivity.CADENCE_PACKAGE)
+                        if (back != null) context.startActivity(back)
+                        (context as? android.app.Activity)?.finish()
+                    },
+                ) { Text("Back to Cadence") }
+            }
+        }
         Text(
             "On-device Gemma · LiteRT-LM + Gemini Nano (AICore) · OpenAI-compatible",
             style = MaterialTheme.typography.bodyMedium,
