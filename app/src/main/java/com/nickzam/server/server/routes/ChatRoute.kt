@@ -24,6 +24,7 @@ import com.nickzam.server.Settings
 import com.nickzam.server.StreamChoice
 import com.nickzam.server.StreamDelta
 import com.nickzam.server.StreamResponse
+import com.nickzam.server.findModelInfo
 import com.nickzam.server.inference.EngineRegistry
 import com.nickzam.server.inference.litert.LlmMessageConverter
 import com.nickzam.server.inference.litert.SessionManager
@@ -77,6 +78,7 @@ fun Route.chatRoute(
     appContext: Context,
     engineRegistry: EngineRegistry,
     sessionManager: SessionManager,
+    nanoEngine: com.nickzam.server.inference.aicore.NanoEngine,
     rateLimiter: RateLimiter,
     inferenceMutex: Mutex,
     serviceScope: CoroutineScope,
@@ -205,6 +207,27 @@ fun Route.chatRoute(
 
         val remoteIp = call.request.local.remoteHost
         val timeoutMs = Settings.requestTimeoutMs(appContext)
+
+        // Hosted lane (Gemini Nano via AICore): no engine acquire, no session
+        // cache, no KV budget — the AICore service owns everything. Same rate
+        // limit, queue, tracker, timeout, and wake-lock discipline as LiteRT.
+        if (findModelInfo(req.model)?.hosted == true) {
+            handleNanoCompletion(
+                call = call,
+                req = req,
+                entry = entry,
+                appContext = appContext,
+                nanoEngine = nanoEngine,
+                inferenceMutex = inferenceMutex,
+                serviceScope = serviceScope,
+                lastActivityAt = lastActivityAt,
+                acquireWakeLock = acquireWakeLock,
+                timeoutMs = timeoutMs,
+                gson = gson,
+                remoteIp = remoteIp,
+            )
+            return@post
+        }
 
         var resolved: SessionManager.Resolved? = null
         var inferenceOk = false
@@ -531,9 +554,206 @@ internal fun liteRtAcquireEnvelope(modelId: String, t: Throwable): Pair<HttpStat
         code = "LITERT_INIT_FAILED",
         actionable = true,
         nextSteps = listOf(
-            "Open the PixelUnlockGPU app and confirm the model is downloaded and hash-verified",
+            "Open the PixelServer app and confirm the model is downloaded and hash-verified",
             "Confirm this device is a Pixel 10 (Tensor G5) — the model only runs there",
             "Check /health last_load_error for the sanitized failure reason",
         ),
     )
+}
+
+/**
+ * `POST /v1/chat/completions` for the hosted Gemini Nano lane (AICore).
+ * Mirrors the LiteRT path's contract — queue/tracker accounting, the
+ * inference mutex, request timeout, wake lock, SSE or JSON — minus engine
+ * acquisition and session caching (AICore is stateless per call and owns
+ * the weights). Errors map honestly: an unavailable host or failed host
+ * call is a 503; a prompt over AICore's window is a 413.
+ */
+private suspend fun handleNanoCompletion(
+    call: ApplicationCall,
+    req: ChatRequest,
+    entry: RequestTracker.Entry,
+    appContext: Context,
+    nanoEngine: com.nickzam.server.inference.aicore.NanoEngine,
+    inferenceMutex: Mutex,
+    serviceScope: CoroutineScope,
+    lastActivityAt: AtomicLong,
+    acquireWakeLock: suspend (timeoutMs: Long, block: suspend () -> Unit) -> Unit,
+    timeoutMs: Long,
+    gson: Gson,
+    remoteIp: String,
+) {
+    val responseId = "chatcmpl-${entry.id}"
+    val temp = req.temperature ?: Settings.temperature(appContext)
+    val topK = req.topK ?: Settings.topK(appContext)
+    LogManager.i(
+        "ChatRoute",
+        "Nano request #${entry.id} from $remoteIp: stream=${req.stream}, " +
+            "msgs=${req.messages.size}",
+    )
+    RequestTracker.markStarted(entry.id)
+    RequestTracker.markEngineReady(entry.id) // no engine build; ready at once
+
+    var streamWriter: ByteWriteChannel? = null
+    inferenceMutex.withLock {
+        try {
+            if (req.stream) {
+                call.response.cacheControl(CacheControl.NoCache(null))
+                call.respondBytesWriter(contentType = ContentType.Text.EventStream) {
+                    streamWriter = this@respondBytesWriter
+                    val acc = RequestTracker.accumulatorFor(entry.id)
+                    withTimeout(timeoutMs) {
+                        acquireWakeLock(timeoutMs) {
+                            try {
+                                val writeMutex = Mutex()
+                                suspend fun safeWrite(s: String) {
+                                    writeMutex.withLock {
+                                        this@respondBytesWriter.writeStringUtf8(s)
+                                        this@respondBytesWriter.flush()
+                                    }
+                                }
+                                val heartbeat = serviceScope.launch {
+                                    while (isActive) {
+                                        delay(10_000L)
+                                        try { safeWrite(": ka\n\n") } catch (_: Throwable) { return@launch }
+                                    }
+                                }
+                                try {
+                                    safeWrite("data: ${gson.toJson(StreamResponse(
+                                        id = responseId,
+                                        `object` = "chat.completion.chunk",
+                                        created = System.currentTimeMillis() / 1000,
+                                        model = req.model,
+                                        choices = listOf(StreamChoice(0, StreamDelta(role = "assistant"), null)),
+                                    ))}\n\n")
+                                    nanoEngine.generate(
+                                        chat = req,
+                                        temperature = temp,
+                                        topK = topK,
+                                        maxTokens = req.maxTokens,
+                                        onText = { chunk ->
+                                            acc.add(chunk.length)
+                                            safeWrite("data: ${gson.toJson(StreamResponse(
+                                                id = responseId,
+                                                `object` = "chat.completion.chunk",
+                                                created = System.currentTimeMillis() / 1000,
+                                                model = req.model,
+                                                choices = listOf(StreamChoice(0, StreamDelta(content = chunk), null)),
+                                            ))}\n\n")
+                                        },
+                                    )
+                                    safeWrite("data: ${gson.toJson(StreamResponse(
+                                        id = responseId,
+                                        `object` = "chat.completion.chunk",
+                                        created = System.currentTimeMillis() / 1000,
+                                        model = req.model,
+                                        choices = listOf(StreamChoice(0, StreamDelta(), "stop")),
+                                    ))}\n\n")
+                                    safeWrite("data: [DONE]\n\n")
+                                } finally {
+                                    heartbeat.cancel()
+                                    acc.flush()
+                                }
+                            } catch (t: Throwable) {
+                                acc.flush()
+                                throw t
+                            }
+                        }
+                    }
+                }
+            } else {
+                var text = ""
+                withTimeout(timeoutMs) {
+                    acquireWakeLock(timeoutMs) {
+                        text = nanoEngine.generate(
+                            chat = req,
+                            temperature = temp,
+                            topK = topK,
+                            maxTokens = req.maxTokens,
+                            onText = {},
+                        )
+                    }
+                }
+                RequestTracker.recordChunk(entry.id, text)
+                call.respond(ChatResponse(
+                    id = responseId,
+                    `object` = "chat.completion",
+                    created = System.currentTimeMillis() / 1000,
+                    model = req.model,
+                    choices = listOf(Choice(
+                        index = 0,
+                        message = Message(role = "assistant", content = stringContent(text)),
+                        finishReason = "stop",
+                    )),
+                ))
+            }
+            RequestTracker.markCompleted(entry.id)
+            lastActivityAt.set(System.currentTimeMillis())
+        } catch (te: TimeoutCancellationException) {
+            LogManager.e("ChatRoute", "Nano request #${entry.id} timed out after ${timeoutMs} ms")
+            RequestTracker.markCompleted(entry.id, error = "timeout after ${timeoutMs} ms")
+            val w = streamWriter
+            if (w != null) {
+                writeSseError(w, "Inference timeout", "timeout", 408, gson)
+            } else {
+                try {
+                    call.respondError(
+                        HttpStatusCode.RequestTimeout,
+                        ErrorResponse(ErrorDetails("Inference timeout", "timeout", 408)),
+                        gson,
+                    )
+                } catch (_: Exception) { /* stream already started */ }
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            RequestTracker.markCompleted(entry.id, cancelled = true)
+            throw ce
+        } catch (e: com.nickzam.server.inference.aicore.NanoPromptTooLargeException) {
+            RequestTracker.markCompleted(entry.id, error = "prompt_too_large")
+            val w = streamWriter
+            if (w != null) {
+                writeSseError(w, e.message ?: "Prompt too large", "invalid_request_error", 413, gson)
+            } else {
+                try {
+                    call.respondError(
+                        HttpStatusCode.PayloadTooLarge,
+                        ErrorResponse(ErrorDetails(e.message ?: "Prompt too large", "invalid_request_error", 413)),
+                        gson,
+                    )
+                } catch (_: Exception) { /* stream already started */ }
+            }
+        } catch (e: com.nickzam.server.inference.aicore.NanoUnavailableException) {
+            RequestTracker.markCompleted(entry.id, error = e.message ?: "aicore_unavailable")
+            val w = streamWriter
+            if (w != null) {
+                writeSseError(w, e.message ?: "Gemini Nano unavailable", "aicore_unavailable", 503, gson)
+            } else {
+                try {
+                    call.respondError(
+                        HttpStatusCode.ServiceUnavailable,
+                        ErrorResponse(ErrorDetails(e.message ?: "Gemini Nano unavailable", "aicore_unavailable", 503)),
+                        gson,
+                    )
+                } catch (_: Exception) { /* stream already started */ }
+            }
+        } catch (e: Exception) {
+            LogManager.e("ChatRoute", "Nano request #${entry.id} error", e)
+            RequestTracker.markCompleted(entry.id, error = e.message ?: e.javaClass.simpleName)
+            val w = streamWriter
+            if (w != null) {
+                writeSseError(w, e.message ?: "Unknown error", "server_error", 500, gson)
+            } else {
+                try {
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        ErrorResponse(ErrorDetails(
+                            message = e.message ?: "Unknown error",
+                            type = "server_error",
+                            code = 500,
+                        )),
+                        gson,
+                    )
+                } catch (_: Exception) { /* stream already started */ }
+            }
+        }
+    }
 }

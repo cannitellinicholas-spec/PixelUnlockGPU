@@ -79,6 +79,11 @@ object LiteRtEngineBuilder {
         Backend.LITERT_CPU -> LiteRtBackend.CPU()
         Backend.LITERT_GPU -> LiteRtBackend.GPU()
         Backend.LITERT_NPU -> LiteRtBackend.NPU(nativeLibDir)
+        // The hosted lane (Gemini Nano) never builds a LiteRT engine —
+        // EngineRegistry refuses it before this point. Fail loudly if it slips.
+        Backend.AICORE -> throw IllegalStateException(
+            "AICORE is a hosted backend; it has no LiteRT delegate.",
+        )
     }
 
     private fun buildOne(

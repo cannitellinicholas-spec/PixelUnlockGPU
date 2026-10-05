@@ -1,12 +1,25 @@
 # Device–model compatibility matrix (Gate 0 manifest)
 
-PixelUnlockGPU serves a small pinned catalog; each entry names its own backend and
+PixelServer serves a small pinned catalog; each entry names its own backend and
 SoC gate. This file is the pinned compatibility set from the Gate 0
 source/license audit (2026-09-30). If any dependency or artifact changes,
 update this file and re-run the compatibility gate before merging.
 
 Catalog additions after the original Gate 0 audit:
 
+- `gemini-nano-fast` — Gemini Nano **FAST**, hosted by the AICore system
+  service through `com.google.mlkit:genai-prompt` **1.0.0-beta4** (the pin
+  the sibling PixelChat lane verified on the Pixel 10 Pro XL). No local
+  artifact: AICore owns the model download, so this entry has no URL,
+  filename, or SHA-256 — `ModelInfo.hosted` is the flag every file/hash
+  path branches on. `ModelPreference.FAST` + `ModelReleaseStage.PREVIEW`
+  only; FULL is deliberately not offered — AICore's preview Full bundle
+  fails inference on this firmware even after a clean model re-download
+  (verified 2026-10-05 in the sibling lane). Availability is a live
+  `checkStatus()` probe (cached 15 s): `/v1/models` and `/health` list the
+  entry only while AVAILABLE; requests otherwise get 503 with AICore's own
+  reason. The beta4 AAR's manifest supplies the AICore `BIND_SERVICE`
+  permission and the `<queries>` package entry automatically.
 - `gemma-4-e4b-it-gpu` — Gemma 4 E4B GPU bundle
   (`litert-community/gemma-4-E4B-it-litert-lm` @ `2eee7ac`,
   `gemma-4-E4B-it-gpu.litertlm`, 2,969,059,328 B,
@@ -61,7 +74,7 @@ Evidence labels (used across issues, commits, and test reports):
 | `com.google.ai.edge.litertlm:litertlm-android` (Google Maven) | **0.12.0** |
 
 Newer `litertlm-android` releases exist (up to 0.17.1 at audit time) but are
-**untested with this integration** — never float. Box pins 0.10.0; PixelUnlockGPU
+**untested with this integration** — never float. Box pins 0.10.0; PixelServer
 pins **0.12.0** to match localLLM's proven server-side API usage
 (`Conversation.sendMessageAsync → Flow`, `SamplerConfig(topK, topP,
 temperature, seed)`). If Gate 1 shows the artifact will not init under
@@ -106,7 +119,7 @@ temperature, seed)`). If Gate 1 shows the artifact will not init under
 | `libLiteRtDispatch_GoogleTensor.so` (409,920 bytes) | `5731f46e9ac6e016113524a7a15fe9feb7bb55e03a0ce1c1b9aee7d5aab46fad` | **Byte-identical** in localLLM (`761bc94`) and Box_with_API (`fe6485c`) — origin unambiguous |
 
 Box additionally ships Qualcomm/MediaTek dispatch + compiler plugins and QNN
-libraries; PixelUnlockGPU ports only the GoogleTensor dispatch lib (single-SoC
+libraries; PixelServer ports only the GoogleTensor dispatch lib (single-SoC
 MVP). The LiteRT-LM JNI itself ships inside the `litertlm-android` AAR.
 
 ## 5. Backend mapping (ported path)
@@ -132,7 +145,7 @@ fragments:
 - `ConversationConfig` has **no stop-sequence field** → `stop` is rejected
   with an explicit 400 (`unsupported_feature`).
 - `SamplerConfig(topK: Int, topP: Double, temperature: Double, seed: Int)`
-  → `top_p` is exposed (localLLM hardcodes 0.95; PixelUnlockGPU threads it through
+  → `top_p` is exposed (localLLM hardcodes 0.95; PixelServer threads it through
   and tracks it in session reuse).
 - `Conversation.benchmarkInfo` exposes init/TTFT/prefill/decode rates for
   Gate 5 measurements.

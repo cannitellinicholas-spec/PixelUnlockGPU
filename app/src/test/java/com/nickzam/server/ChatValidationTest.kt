@@ -23,6 +23,32 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(base()))
     }
 
+    @Test fun `nano hosted model accepts plain text chat`() {
+        assertNull(ChatValidation.validate(
+            base().copy(model = NANO_FAST_MODEL_ID)))
+        assertNull(ChatValidation.validate(
+            base().copy(
+                model = NANO_FAST_MODEL_ID,
+                messages = listOf(msg("system", "Be brief"), msg("user", "Hi")),
+                stream = true,
+            )))
+    }
+
+    @Test fun `nano hosted model rejects tool declarations`() {
+        val f = ChatValidation.validate(
+            base().copy(model = NANO_FAST_MODEL_ID, tools = JsonParser.parseString("[{\"type\":\"function\"}]")))!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("unsupported_feature", f.type)
+        assertTrue(f.message.contains("AICore"))
+    }
+
+    @Test fun `nano hosted model rejects speculative decoding`() {
+        val f = ChatValidation.validate(
+            base().copy(model = NANO_FAST_MODEL_ID, speculativeDecoding = true))!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("unsupported_feature", f.type)
+    }
+
     @Test fun `speculative decoding true on a drafter model passes`() {
         assertNull(ChatValidation.validate(
             base().copy(model = GPU_SPEC_MODEL_ID, speculativeDecoding = true)))

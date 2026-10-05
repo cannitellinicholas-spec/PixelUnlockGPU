@@ -1,4 +1,4 @@
-# PixelUnlockGPU HTTP API
+# PixelServer HTTP API
 
 Base URL (default): `http://127.0.0.1:8080`. OpenAI path prefix: `/v1`.
 
@@ -17,7 +17,7 @@ The top-level `model` object tracks the model **selected in the app**
 ```json
 {
   "status": "ok",
-  "service": "pixelunlockgpu-android",
+  "service": "pixelserver-android",
   "version": "0.1.0",
   "server": { "port": 8080, "loopback_only": true },
   "model": {
@@ -36,7 +36,12 @@ The top-level `model` object tracks the model **selected in the app**
     { "id": "gemma-4-e4b-it-gpu", "declared_backend": "LITERT_GPU",
       "installed": true, "loaded": true, "backend_proven": "GPU_OPENCL",
       "size_bytes": 2969059328, "sha256_prefix": "4912bb5a9c30993c",
-      "context_tokens": null }
+      "context_tokens": null },
+    { "id": "gemini-nano-fast", "declared_backend": "AICORE", "hosted": true,
+      "installed": true, "loaded": true, "backend_proven": "AICORE",
+      "aicore_status": "available",
+      "size_bytes": null, "sha256_prefix": null, "context_tokens": null,
+      "spec_capable": false, "spec_active": false }
   ],
   "engine": {
     "actual_backend": "GPU_OPENCL",
@@ -59,12 +64,13 @@ The top-level `model` object tracks the model **selected in the app**
 ```
 
 - `engine.actual_backend` is proven only by a healthy cached engine:
-  `GOOGLE_TENSOR_NPU` (NPU), `GPU_OPENCL` (GPU), or `CPU`; otherwise
-  `unknown` (or `error` with `last_load_error` set). A valid chat response
-  alone never proves backend execution — this field plus runtime logs is
-  the proof. Per-model: `models[].backend_proven` names the backend proven
-  for that entry's cached engine (or `declared_*` while an un-attempted
-  engine sits cached).
+  `GOOGLE_TENSOR_NPU` (NPU), `GPU_OPENCL` (GPU), or `CPU`; `AICORE` when the
+  app-selected model is the hosted Gemini Nano entry and AICore reports it
+  AVAILABLE; otherwise `unknown` (or `error` with `last_load_error` set). A
+  valid chat response alone never proves backend execution — this field plus
+  runtime logs is the proof. Per-model: `models[].backend_proven` names the
+  backend proven for that entry's cached engine (or `declared_*` while an
+  un-attempted engine sits cached).
 - Only one MODEL's engine is resident at a time — acquiring a different
   model evicts the previous model's engines (each bundle is ~3 GB).
 - `model.context_tokens` is `null` until the limit is verified on-device.
@@ -78,19 +84,28 @@ On Tensor G5 devices, NPU-backend models return `status: "error"` with a
 refusal message (the delegate is not loadable from an app on stock
 firmware); the process stays alive and any loaded GPU engine keeps serving.
 
+For the hosted `gemini-nano-fast` entry there is no engine to build: warm
+means the AICore probe is AVAILABLE and one short generation comes back.
+A non-AVAILABLE host returns `status: "error"` with AICore's reason.
+
 ## `GET /v1/models`
 
-OpenAI-shaped list of **installed** models only (`owned_by` names each
-entry's declared backend):
+OpenAI-shaped list of models the client can actually call (`owned_by` names
+each entry's declared backend). LiteRT entries appear iff their bundle is on
+disk; the hosted `gemini-nano-fast` entry appears iff AICore reports the
+model AVAILABLE (probed live — AICore owns the weights):
 
 ```json
 { "object": "list", "data": [
-  { "id": "gemma-4-e2b-it-tpu-g5", "object": "model", "created": 1710000000, "owned_by": "pixelunlockgpu-litert_npu" },
-  { "id": "gemma-4-e4b-it-gpu", "object": "model", "created": 1710000000, "owned_by": "pixelunlockgpu-litert_gpu" }
+  { "id": "gemma-4-e2b-it-tpu-g5", "object": "model", "created": 1710000000, "owned_by": "pixelserver-litert_npu" },
+  { "id": "gemma-4-e4b-it-gpu", "object": "model", "created": 1710000000, "owned_by": "pixelserver-litert_gpu" },
+  { "id": "gemini-nano-fast", "object": "model", "created": 1710000000, "owned_by": "pixelserver-aicore" }
 ]}
 ```
 
-Empty `data` means no bundle is on disk — download/import one in the app.
+LiteRT `data` empty means no bundle is on disk — download/import one in the
+app. A missing `gemini-nano-fast` entry means AICore has the Nano model
+downloadable/downloading/unavailable (see `/health` `models[].aicore_status`).
 
 ## `POST /v1/chat/completions`
 
@@ -98,7 +113,7 @@ Text chat. Request fields:
 
 | Field | Required | Notes |
 |---|---|---|
-| `model` | yes | Must equal a catalog ID exactly (`gemma-4-e2b-it-tpu-g5` or `gemma-4-e4b-it-gpu`); unknown IDs are a 400, never mapped to the selected model |
+| `model` | yes | Must equal a catalog ID exactly (`gemma-4-e2b-it-tpu-g5`, `gemma-4-e4b-it-gpu`, or `gemini-nano-fast`); unknown IDs are a 400, never mapped to the selected model |
 | `messages` | yes | Non-empty; roles `system`/`user`/`assistant`; string or text-parts content; last non-system message must be `user` |
 | `stream` | no | `true` → SSE; default `false` |
 | `session_id` | no | In-memory KV-cache reuse across turns (prefix-validated) |
@@ -113,6 +128,22 @@ advertise tools still get plain-text generations. Explicitly rejected with
 400 `unsupported_feature` (never silently ignored): `tool_choice` other than
 `"none"`/`"auto"` (it would force a call the server can't produce), `stop`,
 `image_url` / audio / multimodal parts, `tool_calls`, `tool` roles.
+
+### Gemini Nano lane (`gemini-nano-fast`)
+
+Same route, same validation, one hosted backend: generation runs inside the
+AICore system service (ML Kit GenAI Prompt API, FAST preference only). The
+lane has no KV/session cache — every call is stateless from the server's
+side; conversation history rides in `messages`. Nano-specific rules:
+
+- `tools` declarations are rejected with 400 `unsupported_feature` (the
+  Prompt API has no tool surface at all; LiteRT models relay tools natively).
+- `speculative_decoding: true` is rejected (no bundle, no drafter).
+- Prompts over AICore's own token window fail fast with 413 before any
+  generation.
+- AICore being unavailable (service missing, model downloadable/downloading)
+  is a 503 `aicore_unavailable` with AICore's own reason in `message`.
+- `session_id` has no effect on this lane.
 
 All error bodies are JSON regardless of the client `Accept` header, so
 streaming-only clients (OpenAI SDK, agent CLIs) see the real error instead
@@ -139,8 +170,8 @@ fabricated).
 | 400 | Malformed JSON, unknown model, bad roles/content, unsupported feature, invalid sampling |
 | 401 | Missing/invalid bearer key (when a key is set) |
 | 408 | Inference timeout |
-| 413 | Body or prompt exceeds caps |
+| 413 | Body or prompt exceeds caps (LiteRT prompt cap, or Gemini Nano's AICore token window) |
 | 429 | Per-client rate limit or queue full (`Retry-After`) |
-| 503 | Engine not loadable (`LITERT_INIT_FAILED` envelope with next steps) |
+| 503 | Engine not loadable (`LITERT_INIT_FAILED` envelope with next steps) or Gemini Nano unavailable in AICore (`aicore_unavailable`) |
 | 504 | Warm-up timeout (`/health/warm` only) |
 | 500 | Anything else (sanitized message, no stack traces) |

@@ -22,6 +22,7 @@ data class ServerDeps(
     val appContext: Context,
     val engineRegistry: EngineRegistry,
     val sessionManager: SessionManager,
+    val nanoEngine: com.nickzam.server.inference.aicore.NanoEngine,
     val inferenceMutex: Mutex,
     val rateLimiter: RateLimiter,
     val serviceScope: CoroutineScope,

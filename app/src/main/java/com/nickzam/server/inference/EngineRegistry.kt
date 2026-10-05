@@ -152,6 +152,14 @@ class EngineRegistry(
      */
     fun acquire(modelId: String, maxTokens: Int?, specOverride: Boolean? = null): AcquiredEngine.LiteRt {
         val info = resolveModelInfo(modelId)
+        // Hosted models (Gemini Nano via AICore) have no in-process engine —
+        // the chat route must never route them here. Fail explicitly.
+        if (info.hosted) {
+            val msg = "Model '${info.id}' is hosted (served by AICore); it has no " +
+                "LiteRT engine. Route it through NanoEngine instead."
+            recordLoadError(msg)
+            throw IllegalStateException(msg)
+        }
         // Context window is a user-tunable KV-cache budget (see
         // Settings.contextTokens). It is part of the engine key, so each
         // distinct budget is its own cached engine; changing it and reloading

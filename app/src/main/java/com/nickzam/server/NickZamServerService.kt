@@ -97,12 +97,14 @@ class NickZamServerService : Service() {
 
     private val engineRegistry by lazy { EngineRegistry(this) }
     private val sessionManager by lazy { SessionManager(engineRegistry) }
+    private val nanoEngine by lazy { com.nickzam.server.inference.aicore.NanoEngine() }
 
     private val deps by lazy {
         ServerDeps(
             appContext = this,
             engineRegistry = engineRegistry,
             sessionManager = sessionManager,
+            nanoEngine = nanoEngine,
             inferenceMutex = inferenceMutex,
             rateLimiter = rateLimiter,
             serviceScope = serviceScope,
@@ -115,6 +117,7 @@ class NickZamServerService : Service() {
         super.onCreate()
         ServiceLocator.engineRegistry = engineRegistry
         ServiceLocator.sessionManager = sessionManager
+        ServiceLocator.nanoEngine = nanoEngine
         ServiceLocator.inferenceMutex = inferenceMutex
         startForegroundNotif()
         startServer()
@@ -343,6 +346,8 @@ class NickZamServerService : Service() {
         ServiceLocator.engineRegistry = null
         ServiceLocator.sessionManager = null
         ServiceLocator.inferenceMutex = null
+        ServiceLocator.nanoEngine?.close()
+        ServiceLocator.nanoEngine = null
         idleMonitorJob?.cancel()
         serviceScope.cancel()
         try { if (wakeLock.isHeld) wakeLock.release() } catch (_: Exception) {}

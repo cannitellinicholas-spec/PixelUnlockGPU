@@ -39,12 +39,13 @@ object ServerEngine {
         embeddedServer(Netty, port = port, host = host) {
             install(ContentNegotiation) { gson() }
             routing {
-                healthRoute(deps.engineRegistry, deps.appContext, deps.inferenceMutex)
-                modelsRoute(deps.appContext, deps.engineRegistry)
+                healthRoute(deps.engineRegistry, deps.appContext, deps.inferenceMutex, deps.nanoEngine)
+                modelsRoute(deps.appContext, deps.engineRegistry, deps.nanoEngine)
                 chatRoute(
                     appContext = deps.appContext,
                     engineRegistry = deps.engineRegistry,
                     sessionManager = deps.sessionManager,
+                    nanoEngine = deps.nanoEngine,
                     rateLimiter = deps.rateLimiter,
                     inferenceMutex = deps.inferenceMutex,
                     serviceScope = deps.serviceScope,

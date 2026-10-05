@@ -53,6 +53,14 @@ object ChatValidation {
         // silently ignored. Forced tool_choice is still rejected: honoring
         // "must call tool X" needs server-side execution we don't do.
         val toolsDeclared = isNonEmpty(req.tools)
+        // The hosted Nano lane (AICore Prompt API, beta4) has no tool
+        // surface at all — declaring tools there would promise a capability
+        // the model can never use, so reject explicitly, never silently.
+        if (toolsDeclared && findModelInfo(req.model)?.hosted == true) {
+            return Failure(400, "unsupported_feature",
+                "model '${req.model}' is served by AICore, which exposes no " +
+                    "tool-calling surface; use a LiteRT model for tool loops")
+        }
         if (isPresent(req.toolChoice) && !isTrivialToolChoice(req.toolChoice)) {
             return Failure(400, "unsupported_feature",
                 "tool_choice other than \"none\"/\"auto\" forces a tool call " +

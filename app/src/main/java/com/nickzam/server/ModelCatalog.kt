@@ -18,11 +18,14 @@ import android.os.Build
  * - [LITERT_NPU] → LiteRT-LM with `Backend.NPU(nativeLibraryDir)`. Requires
  *   the vendor delegate `.so` to be present. On Pixel 10 this is the
  *   Tensor G5 TPU via `libLiteRtDispatch_GoogleTensor.so`.
+ * - [AICORE] → Gemini Nano via the on-device AICore service, reached through
+ *   the ML Kit GenAI Prompt API (see NanoEngine). There is no in-process
+ *   engine: the weights are owned by AICore, so this lane has no local
+ *   `.litertlm` file and no SHA-256 gate (see [ModelInfo.hosted]).
  *
- * Ported from localLLM's `Backend` minus `AICORE` (the MVP has no AICore
- * engine; see docs/device-model-matrix.md).
+ * Ported from localLLM's `Backend` plus the AICORE lane (v0.1.8).
  */
-enum class Backend { LITERT_CPU, LITERT_GPU, LITERT_NPU }
+enum class Backend { LITERT_CPU, LITERT_GPU, LITERT_NPU, AICORE }
 
 /** The original stable model ID this server advertises (Tensor G5 NPU bundle). */
 const val STABLE_MODEL_ID = "gemma-4-e2b-it-tpu-g5"
@@ -47,6 +50,16 @@ const val GPU_SPEC_MODEL_ID = "gemma-4-e4b-it-gpu-spec"
  * the Gemma Terms of Use.
  */
 const val INT4_CPU_MODEL_ID = "gemma-4-e2b-it-int4-cpu"
+
+/**
+ * Gemini Nano served by the on-device AICore service through the ML Kit
+ * GenAI Prompt API — FAST preference only (FULL is known-broken on this
+ * firmware: AICore's preview Full bundle fails inference even after a
+ * clean model re-download, verified 2026-10-05 in the sibling PixelChat
+ * integration). No local file: AICore owns the weights, so there is no
+ * URL/hash gate; availability is probed live via FeatureStatus.
+ */
+const val NANO_FAST_MODEL_ID = "gemini-nano-fast"
 
 /**
  * Metadata for the served model bundle: stable public ID, artifact hash,
@@ -93,6 +106,14 @@ data class ModelInfo(
      * claims it when both agree.
      */
     val speculativeDecoding: Boolean = false,
+    /**
+     * True when the model is served by an external on-device service (AICore)
+     * rather than an in-process LiteRT engine. Hosted entries have no local
+     * `.litertlm` file, no download URL, and no SHA-256 to verify — readiness
+     * is decided by probing the host service (see NanoEngine), not by file
+     * presence. Every filesystem/hash path in the app must branch on this.
+     */
+    val hosted: Boolean = false,
 )
 
 /**
@@ -241,6 +262,28 @@ val AVAILABLE_MODELS: List<ModelInfo> = listOf(
         expectedSizeBytes = 2_556_483_760L,
         licenseNotice = "Gemma Terms of Use: https://ai.google.dev/gemma/terms. " +
             "Artifact: UrielSalto/gemma-4-e2b-it-int4-litert-lm @ 652d52e.",
+    ),
+    ModelInfo(
+        id = NANO_FAST_MODEL_ID,
+        name = "Gemini Nano (Fast, AICore)",
+        description = "Google's on-device Gemini Nano, FAST variant only, served " +
+            "by the AICore system service through the ML Kit GenAI Prompt API. " +
+            "No download here: AICore owns the model and downloads it through " +
+            "its own channel. FAST is the only supported preference — the " +
+            "FULL preview bundle fails inference on this firmware. AICore's own " +
+            "token window applies; long prompts are rejected before generation.",
+        url = "",
+        filename = "",
+        backend = Backend.AICORE,
+        // Hosted by AICore — no artifact to pin or hash. The empty string is
+        // never verified: hosted entries skip the SHA-256 gate entirely.
+        sha256 = "",
+        requiredSocMarker = null,
+        contextTokens = null,
+        expectedSizeBytes = null,
+        licenseNotice = "Gemini Nano is provided by the AICore system service on " +
+            "this device; subject to Google's AICore terms.",
+        hosted = true,
     ),
 )
 

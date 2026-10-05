@@ -12,8 +12,8 @@ android {
         applicationId = "com.nickzam.server"
         minSdk = 29
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.1.7"
+        versionCode = 9
+        versionName = "0.1.8"
         // SHA-256 of the pinned model artifact (docs/device-model-matrix.md).
         // Fail-closed: a mismatch refuses the load. Updated by the Gate 0
         // audit; any artifact change must update this and re-run the gate.
@@ -117,6 +117,11 @@ dependencies {
 
     // Inference runtime (pinned — see docs/device-model-matrix.md).
     implementation(libs.litertlm.android)
+
+    // Gemini Nano via the AICore host service (ML Kit GenAI Prompt API).
+    // The AAR manifest brings its own BIND_SERVICE permission and a
+    // <queries> entry for com.google.android.aicore.
+    implementation(libs.mlkit.genai.prompt)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

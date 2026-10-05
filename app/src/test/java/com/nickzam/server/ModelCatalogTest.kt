@@ -16,13 +16,35 @@ import org.junit.Test
 class ModelCatalogTest {
 
     @Test fun `catalog serves the stable NPU model and the GPU model`() {
-        assertEquals(4, AVAILABLE_MODELS.size)
+        assertEquals(5, AVAILABLE_MODELS.size)
         val npu = findModelInfo(STABLE_MODEL_ID)!!
         assertEquals("gemma-4-e2b-it-tpu-g5", npu.id)
         assertEquals(Backend.LITERT_NPU, npu.backend)
         val gpu = findModelInfo(GPU_MODEL_ID)!!
         assertEquals("gemma-4-e4b-it-gpu", gpu.id)
         assertEquals(Backend.LITERT_GPU, gpu.backend)
+    }
+
+    @Test fun `nano entry is hosted FAST-only with no artifact`() {
+        val info = findModelInfo(NANO_FAST_MODEL_ID)!!
+        assertEquals("gemini-nano-fast", info.id)
+        assertEquals(Backend.AICORE, info.backend)
+        assertTrue("hosted lane has no local file", info.hosted)
+        assertTrue("no artifact to pin", info.url.isEmpty())
+        assertTrue("no hash gate", info.sha256.isEmpty())
+        assertTrue("filename must stay blank so no file path is ever built", info.filename.isBlank())
+        assertNull(info.expectedSizeBytes)
+        assertFalse("Nano has no MTP drafter", info.speculativeDecoding)
+        // The name promises FAST and only FAST.
+        assertTrue(info.name.contains("Fast"))
+        assertTrue(info.description.contains("FAST"))
+    }
+
+    @Test fun `only liteRt entries have non-blank filenames`() {
+        AVAILABLE_MODELS.forEach { info ->
+            if (info.hosted) assertTrue("hosted ${info.id} filename must be blank", info.filename.isBlank())
+            else assertTrue("litert ${info.id} needs a filename", info.filename.isNotBlank())
+        }
     }
 
     @Test fun `spec entry declares the drafter and has its own file`() {

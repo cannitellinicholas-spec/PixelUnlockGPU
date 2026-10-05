@@ -103,7 +103,10 @@ private fun NickZamScreen() {
     val modelFile = remember(snapshot, model) {
         File(context.getExternalFilesDir(null), model.filename)
     }
-    val installed = model.filename in snapshot.existingModels
+    // Hosted models (Gemini Nano) have no local file; their "installed" state
+    // mirrors the live AICore probe, refreshed in the poll loop below.
+    var hostedReady by remember { mutableStateOf(false) }
+    val installed = if (model.hosted) hostedReady else model.filename in snapshot.existingModels
 
     var portText by remember { mutableStateOf(Settings.port(context).toString()) }
     var apiKeyText by remember { mutableStateOf(Settings.apiKey(context)) }
@@ -175,6 +178,14 @@ private fun NickZamScreen() {
             }
             engineLoaded = (ServiceLocator.engineRegistry?.snapshot() ?: emptyList())
                 .any { it.cacheKey.startsWith("${model.id}_") }
+            if (model.hosted) {
+                // AICore owns the weights — refresh availability from the
+                // service instead of the engine registry / model dir.
+                hostedReady = withContext(Dispatchers.IO) {
+                    ServiceLocator.nanoEngine?.status() ==
+                        com.google.mlkit.genai.common.FeatureStatus.AVAILABLE
+                }
+            }
             kotlinx.coroutines.delay(1_500L)
             if (activeDownloads.isEmpty()) {
                 // Keep polling engine state lightly even with no downloads.
@@ -216,9 +227,9 @@ private fun NickZamScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("PixelUnlockGPU", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("PixelServer", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
-            "On-device Gemma · LiteRT-LM · OpenAI-compatible",
+            "On-device Gemma · LiteRT-LM + Gemini Nano (AICore) · OpenAI-compatible",
             style = MaterialTheme.typography.bodyMedium,
         )
 
@@ -334,9 +345,52 @@ private fun NickZamScreen() {
                         Backend.LITERT_NPU -> "Tensor G5 TPU (LITERT_NPU) · no fallback"
                         Backend.LITERT_GPU -> "OpenCL GPU delegate (LITERT_GPU) · no fallback"
                         Backend.LITERT_CPU -> "CPU (LITERT_CPU)"
+                        Backend.AICORE -> "AICore host service (Gemini Nano FAST) · no local weights"
                     }}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (model.hosted) {
+                    // ---- Hosted lane (Gemini Nano via AICore) ----
+                    Text(
+                        when {
+                            hostedReady -> "Available in AICore ✓"
+                            else -> "Not available in AICore — AICore owns the download " +
+                                "(its model may still be downloading, or open AICore settings)"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "FAST preference only — AICore's FULL preview bundle fails " +
+                            "inference on this firmware.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(model.licenseNotice, style = MaterialTheme.typography.bodySmall)
+                    if (verifyNote != null) {
+                        Text(verifyNote!!, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                val engine = ServiceLocator.nanoEngine
+                                if (engine == null) {
+                                    withContext(Dispatchers.Main) {
+                                        verifyNote = "Start the server first — the AICore client lives in the service"
+                                    }
+                                    return@launch
+                                }
+                                engine.invalidateStatusCache()
+                                val st = engine.status(ttlMs = 0)
+                                val reason = engine.unavailableReason(st)
+                                withContext(Dispatchers.Main) {
+                                    hostedReady = st == com.google.mlkit.genai.common.FeatureStatus.AVAILABLE
+                                    verifyNote = if (hostedReady) "AICore reports AVAILABLE ✓"
+                                        else "AICore: $reason"
+                                }
+                            }
+                        },
+                    ) { Text("Re-check AICore") }
+                } else {
                 SocBadgeRow(model)
                 Text(
                     when {
@@ -439,6 +493,7 @@ private fun NickZamScreen() {
                         },
                         enabled = engineLoaded,
                     ) { Text("Unload") }
+                }
                 }
             }
         }
