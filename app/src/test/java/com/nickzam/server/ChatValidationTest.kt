@@ -206,4 +206,69 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(base().copy(maxTokens = 1)))
         assertNull(ChatValidation.validate(base().copy(maxTokens = ChatValidation.MAX_TOKENS_CEILING)))
     }
+
+    // ---- Native tools relay (2026-10): declared tools unlock tool turns ----
+
+    private val toolSpecs = JsonParser.parseString(
+        """[{"type":"function","function":{"name":"web_search",
+            "parameters":{"type":"object","properties":{}}}}]""")
+
+    private fun toolCallMsg() = Message(
+        "assistant", null,
+        toolCalls = JsonParser.parseString(
+            """[{"id":"call_0","type":"function","function":
+                {"name":"web_search","arguments":"{\"query\":\"q\"}"}}]"""),
+    )
+
+    private fun toolResultMsg() = Message(
+        "tool", stringContent("result text"), toolCallId = "call_0",
+    )
+
+    @Test fun `with tools declared assistant tool_calls replay passes`() {
+        val req = base().copy(
+            tools = toolSpecs,
+            messages = listOf(msg("user", "weather?"), toolCallMsg(), toolResultMsg()),
+        )
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `tool result as final turn passes when tools declared`() {
+        val req = base().copy(
+            tools = toolSpecs,
+            messages = listOf(msg("user", "weather?"), toolCallMsg(), toolResultMsg()),
+        )
+        // The final message here IS the tool result (mid-loop continuation).
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `tool role without tools declaration still rejected`() {
+        val req = base().copy(messages = listOf(msg("user", "hi"), toolResultMsg()))
+        assertEquals("invalid_request_error", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `assistant tool_calls without declaration still rejected`() {
+        val req = base().copy(messages = listOf(msg("user", "hi"), toolCallMsg(), msg("user", "x")))
+        assertEquals("unsupported_feature", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `tool_calls on non-assistant message rejected even with tools`() {
+        val bad = Message("user", stringContent("x"),
+            toolCalls = JsonParser.parseString("""[{"id":"1"}]"""))
+        val req = base().copy(tools = toolSpecs, messages = listOf(msg("user", "hi"), bad))
+        assertEquals("invalid_request_error", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `tool_call_id on non-tool role rejected even with tools`() {
+        val bad = Message("user", stringContent("x"), toolCallId = "call_0")
+        val req = base().copy(tools = toolSpecs, messages = listOf(msg("user", "hi"), bad))
+        assertEquals("invalid_request_error", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `assistant null content with tool_calls is allowed with tools`() {
+        val req = base().copy(
+            tools = toolSpecs,
+            messages = listOf(msg("user", "hi"), toolCallMsg(), toolResultMsg()),
+        )
+        assertNull(ChatValidation.validate(req))
+    }
 }

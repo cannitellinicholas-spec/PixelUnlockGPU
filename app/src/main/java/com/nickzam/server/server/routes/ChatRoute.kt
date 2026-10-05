@@ -61,8 +61,10 @@ import kotlinx.coroutines.withTimeout
  * `POST /v1/chat/completions` — OpenAI-compatible text chat.
  *
  * Handles request validation (strict: the model must equal the stable ID;
- * images/audio/stop and forced tool_choice are rejected explicitly, while a
- * declared `tools` array is accepted and ignored), per-client rate
+ * images/audio/stop and forced tool_choice are rejected explicitly), native
+ * tool relay (a declared `tools` array binds LiteRT-LM tool providers; the
+ * model's tool_calls are returned to the client with finish_reason=tool_calls
+ * and continued by `role:"tool"` follow-up turns), per-client rate
  * limiting, bounded queue depth, engine acquisition on the catalog-declared
  * backend (no fallback), streaming SSE, non-streaming JSON, and timeout /
  * cancellation cleanup.
@@ -299,6 +301,7 @@ fun Route.chatRoute(
                                 modelName = req.model,
                                 gson = gson,
                                 serviceScope = serviceScope,
+                                hasTools = resolvedLocal.hasTools,
                                 onChunk = { chunk -> acc.add(chunk.length) },
                             )
                         } finally {
@@ -318,6 +321,8 @@ fun Route.chatRoute(
                 }
                 val finalMsg = result!!
                 val responseText = LlmMessageConverter.messageText(finalMsg)
+                val toolCalls =
+                    if (resolvedLocal.hasTools) finalMsg.toolCalls else emptyList()
                 RequestTracker.recordChunk(entry.id, responseText)
                 call.respond(ChatResponse(
                     id = responseId,
@@ -326,8 +331,13 @@ fun Route.chatRoute(
                     model = req.model,
                     choices = listOf(Choice(
                         index = 0,
-                        message = Message(role = "assistant", content = stringContent(responseText)),
-                        finishReason = "stop",
+                        message = Message(
+                            role = "assistant",
+                            content = stringContent(responseText),
+                            toolCalls = if (toolCalls.isNotEmpty())
+                                LlmMessageConverter.toOpenAiToolCalls(toolCalls) else null,
+                        ),
+                        finishReason = if (toolCalls.isNotEmpty()) "tool_calls" else "stop",
                     )),
                 ))
             }
@@ -396,6 +406,7 @@ private suspend fun runInferenceStreaming(
     modelName: String,
     gson: Gson,
     serviceScope: CoroutineScope,
+    hasTools: Boolean = false,
     onChunk: (String) -> Unit = {},
 ) {
     val writeMutex = Mutex()
@@ -425,6 +436,7 @@ private suspend fun runInferenceStreaming(
         // the old length-sliced "cumulative" delta chopped spans and dropped
         // equal-length emissions — the streamed gibberish of 2026-10-01.
         val acc = StringBuilder()
+        var emittedToolCalls: com.google.gson.JsonElement? = null
         conversation.sendMessageAsync(prompt, emptyMap()).collect { msg ->
             val full = LlmMessageConverter.messageText(msg)
             val delta = StreamReassembler.next(acc.toString(), full)
@@ -440,13 +452,28 @@ private suspend fun runInferenceStreaming(
                 )
                 safeWrite("data: ${gson.toJson(chunkResp)}\n\n")
             }
+            // Tool relay: the terminal message carries the complete tool_calls
+            // list; send it as one delta (OpenAI clients tolerate a
+            // non-incremental first — and only — tool_calls chunk).
+            if (hasTools && emittedToolCalls == null && msg.toolCalls.isNotEmpty()) {
+                emittedToolCalls = LlmMessageConverter.toOpenAiToolCalls(msg.toolCalls)
+                val tcResp = StreamResponse(
+                    id = responseId,
+                    `object` = "chat.completion.chunk",
+                    created = System.currentTimeMillis() / 1000,
+                    model = modelName,
+                    choices = listOf(StreamChoice(0, StreamDelta(toolCalls = emittedToolCalls), null)),
+                )
+                safeWrite("data: ${gson.toJson(tcResp)}\n\n")
+            }
         }
         val finalResp = StreamResponse(
             id = responseId,
             `object` = "chat.completion.chunk",
             created = System.currentTimeMillis() / 1000,
             model = modelName,
-            choices = listOf(StreamChoice(0, StreamDelta(), "stop")),
+            choices = listOf(StreamChoice(0, StreamDelta(),
+                if (emittedToolCalls != null) "tool_calls" else "stop")),
         )
         safeWrite("data: ${gson.toJson(finalResp)}\n\n")
         safeWrite("data: [DONE]\n\n")

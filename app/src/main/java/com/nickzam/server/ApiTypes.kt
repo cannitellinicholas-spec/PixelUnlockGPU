@@ -34,8 +34,9 @@ data class Message(
      * else is rejected by [validateChatRequest] before it reaches the engine.
      */
     val content: JsonElement? = null,
-    /** Held raw so any presence can be rejected explicitly (no tool support). */
+    /** Present on assistant messages that call tools (array of tool_call). */
     @SerializedName("tool_calls") val toolCalls: JsonElement? = null,
+    /** Present on role="tool" result messages; correlates to a tool call id. */
     @SerializedName("tool_call_id") val toolCallId: String? = null,
 )
 
@@ -163,8 +164,9 @@ data class ChatRequest(
     @SerializedName("top_p") val topP: Float? = null,
     @SerializedName("max_tokens") val maxTokens: Int? = null,
     /**
-     * Polymorphic on the wire; held raw so any non-empty presence is
-     * rejected with an explicit unsupported-feature error (MVP: no tools).
+     * Declared function tools (OpenAI format, string or object entries).
+     * Held raw: entries are converted to LiteRT-LM ToolProviders at session
+     * creation and the model's calls are relayed back to the client.
      */
     val tools: JsonElement? = null,
     @SerializedName("tool_choice") val toolChoice: JsonElement? = null,
@@ -213,6 +215,9 @@ data class StreamChoice(
 data class StreamDelta(
     val role: String? = null,
     val content: String? = null,
+    /** Native tool relay: emitted once, complete, when the model halted on
+     *  tool calls (clients accumulate tool_call deltas by index). */
+    @SerializedName("tool_calls") val toolCalls: com.google.gson.JsonElement? = null,
 )
 
 data class ErrorResponse(val error: ErrorDetails)
