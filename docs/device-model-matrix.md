@@ -122,6 +122,57 @@ Box additionally ships Qualcomm/MediaTek dispatch + compiler plugins and QNN
 libraries; PixelServer ports only the GoogleTensor dispatch lib (single-SoC
 MVP). The LiteRT-LM JNI itself ships inside the `litertlm-android` AAR.
 
+### 4.1 GPU compiler split across `litertlm-android` versions (measured 2026-10-06)
+
+The catalog label `LITERT_GPU` does **not** mean the same thing across
+`litertlm-android` versions, and this is what makes the E4B bundle work here.
+Measured from the AARs themselves (`unzip -l`, `llvm-readelf -d`, `llvm-nm`,
+`strings`), arm64-v8a:
+
+| | 0.12.0 (this app's pin) | 0.16.1 |
+|---|---|---|
+| `libLiteRt.so` (core runtime, ~50 exported `Dispatch` symbols) | present | **absent** |
+| `libLiteRtClGlAccelerator.so` (exports `LiteRtAcceleratorImpl@@VERS_1.0`) | present | **absent** (only a dlopen-by-name *string* remains in the JNI lib) |
+| `liblitertlm_jni.so` | 14.7 MB, `DT_NEEDED libLiteRt.so` | 21.5 MB monolith, no `libLiteRt.so` dependency |
+| `mldrift` string matches in the JNI lib | 16 | 136 |
+
+Consequences, all observed on the Pixel 10 Pro XL:
+
+- **Why E4B runs on the pinned build:** 0.12.0 ships no MLDrift/Octave GPU
+  compiler at all. `LITERT_GPU` on this build is the legacy CL/GL accelerator
+  executing the *old* graph op set — which is exactly what the August-era
+  `gemma-4-E4B-it-gpu.litertlm` (@ `2eee7ac`) is written in. The stripped
+  native set is a precondition for E4B working, not an oversight.
+- **New-generation bundles are unloadable on 0.12.0.** `litert-community/Phi-4-mini-reasoning`
+  was GPU re-shipped on 2026-10-06 (`attention`/KV-cache rewritten into the
+  runtime's GPU composite ops — `odml.cache_update`, `odml.runtime_bmm`).
+  Engine init fails on 0.12.0 because the only compiler present predates that
+  op set.
+- **Newer runtimes are not a drop-in upgrade.** On 0.16.1 the Phi-4 composite
+  graph compiles and streams correctly, but the same build mis-executes the
+  E4B GPU graph on Pixel 10's BXM GPU (PowerVR) and returns gibberish — with
+  caches cleared and a fresh process, so not stale state. Verified matrix:
+  0.12.0 → E4B ok / Phi-4 init fails; 0.13.1 → E4B fails
+  (`Top-K value 40 must be <= 1`) / Phi-4 ok; 0.15.0 and 0.16.1 → E4B
+  gibberish / Phi-4 ok. No single version serves both graph generations.
+- **Streaming crash when bumping coroutines.** 0.16.1's streaming callback
+  calls `SendChannel.close$default`, a bridge that exists only in
+  kotlinx-coroutines ≥ 1.11.0 (verified with `javap` across 1.9.0 / 1.10.2 /
+  1.11.0; the AAR POM understates its dependency as 1.9.0, and Ktor's
+  transitive coroutines BOM resolves the app to 1.10.2). Without a forced
+  1.11.0 the first streamed reply ends in a FATAL `NoSuchMethodError` that
+  kills the service mid-stream — clients see truncated SSE. This is a
+  separate trap from the compiler split.
+- **No `sampler_backend` knob exists in 0.16.1's public API** (`EngineConfig`
+  exposes only model/backend/vision/audio/maxNumTokens/maxNumImages/cacheDir;
+  `SamplerConfig` only topK/topP/temperature/seed), so the Phi-4 card's
+  `--sampler_backend=cpu` mitigation is CLI-only and unavailable here.
+
+Any future attempt to serve a new-generation GPU bundle needs **per-model
+runtime isolation** (two LiteRT-LM stacks, one per graph generation) rather
+than a shared version bump, because a bump silently re-routes every existing
+GPU model through a different compiler.
+
 ## 5. Backend mapping (ported path)
 
 | Layer | G5 selection |
