@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.nickzam.server.AVAILABLE_MODELS
 import com.nickzam.server.BuildConfig
+import com.nickzam.server.DEFAULT_MODEL
 import com.nickzam.server.LogManager
 import com.nickzam.server.ModelData
 import com.nickzam.server.ModelListResponse
@@ -245,7 +246,7 @@ private fun healthSnapshot(
     val cpuReady = okModelsFor("LITERT_CPU")
     val nanoReady = nanoStatus == com.google.mlkit.genai.common.FeatureStatus.AVAILABLE
     val selectedId = com.nickzam.server.Settings.selectedModelId(appContext)
-    val selected = findModelInfo(selectedId) ?: AVAILABLE_MODELS.first()
+    val selected = findModelInfo(selectedId) ?: DEFAULT_MODEL
     val actualBackend = when {
         npuReady.isNotEmpty() -> "GOOGLE_TENSOR_NPU"
         gpuReady.isNotEmpty() -> "GPU_OPENCL"

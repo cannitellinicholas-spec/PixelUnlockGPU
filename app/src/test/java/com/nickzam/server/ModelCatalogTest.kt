@@ -161,4 +161,12 @@ class ModelCatalogTest {
         // The NPU path aborts on stock G5 firmware, so the app defaults to GPU.
         assertEquals(GPU_MODEL_ID, Settings.DEFAULT_MODEL_ID)
     }
+
+    @Test fun `served default model is the GPU bundle`() {
+        // DEFAULT_MODEL is what unselected surfaces resolve to; the NPU
+        // bundle can never load on stock G5 firmware, so the served
+        // default must be the GPU entry.
+        assertEquals(GPU_MODEL_ID, DEFAULT_MODEL.id)
+        assertEquals(Backend.LITERT_GPU, DEFAULT_MODEL.backend)
+    }
 }

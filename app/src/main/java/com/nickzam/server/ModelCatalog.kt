@@ -27,7 +27,12 @@ import android.os.Build
  */
 enum class Backend { LITERT_CPU, LITERT_GPU, LITERT_NPU, AICORE }
 
-/** The original stable model ID this server advertises (Tensor G5 NPU bundle). */
+/**
+ * Catalog ID of the Tensor G5 NPU bundle. The entry stays listed for a
+ * future vendor-access path, but it is NOT the served default: its NPU
+ * dispatch aborts on stock Android 17, so [DEFAULT_MODEL] resolves to
+ * [GPU_MODEL_ID] instead.
+ */
 const val STABLE_MODEL_ID = "gemma-4-e2b-it-tpu-g5"
 
 /** GPU-delegate bundle ID — the working path on stock Tensor G5 firmware. */
@@ -287,8 +292,13 @@ val AVAILABLE_MODELS: List<ModelInfo> = listOf(
     ),
 )
 
-/** The catalog entry served by default when nothing has been selected. */
-val DEFAULT_MODEL: ModelInfo get() = findModelInfo(STABLE_MODEL_ID) ?: AVAILABLE_MODELS.first()
+/**
+ * The catalog entry served by default when nothing has been selected: the
+ * GPU bundle — the working, on-device-verified path on stock Tensor G5
+ * firmware. ([STABLE_MODEL_ID]'s NPU bundle can never load there: its
+ * dispatch aborts and the engine refuses it.)
+ */
+val DEFAULT_MODEL: ModelInfo get() = findModelInfo(GPU_MODEL_ID) ?: AVAILABLE_MODELS.first()
 
 /** Strict lookup: unknown IDs return null and the caller must fail explicitly. */
 fun findModelInfo(id: String): ModelInfo? = AVAILABLE_MODELS.firstOrNull { it.id == id }
