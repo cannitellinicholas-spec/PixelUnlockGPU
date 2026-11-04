@@ -6,6 +6,19 @@ Auth: when an API key is set in the app, all three routes require
 `Authorization: Bearer <key>` (401 + `WWW-Authenticate: Bearer` otherwise).
 With no key set, the server is open (loopback default).
 
+## Access modes
+
+Set in the app; `/health` reports the active mode in its `access` block.
+
+- **Loopback** (default): binds `127.0.0.1` only.
+- **LAN**: binds `0.0.0.0`. Unencrypted; requires the bearer key.
+- **Tailscale**: binds the phone's `100.x` tailnet IP. Traffic is
+  WireGuard-encrypted end-to-end. Takes precedence over LAN when both
+  toggles are on.
+
+In Tailscale mode with the tailnet down, the server falls back to
+loopback — it never falls back to `0.0.0.0`.
+
 ## `GET /health`
 
 Liveness + readiness + backend evidence. Never emits prompts, tokens, full
@@ -19,6 +32,22 @@ The top-level `model` object tracks the model **selected in the app**
   "status": "ok",
   "service": "pixelunlockgpu-android",
   "version": "0.1.0",
+  "access": { "mode": "loopback", "tailnet_ip": null, "encrypted": false },
+  "throughput": {
+    "note": "estimated: ~4 chars/token (no token API in LiteRT-LM)",
+    "total_tokens_since_start": 4608,
+    "total_output_chars_since_start": 18432,
+    "avg_tokens_per_sec": 8.5,
+    "avg_decode_tokens_per_sec": 12.3,
+    "avg_prefill_tokens_per_sec": 145.0,
+    "live_tokens_per_sec": 0.0,
+    "live_decode_tokens_per_sec": 0.0,
+    "live_prefill_ms": null,
+    "live_prefill_tokens_per_sec": 0.0,
+    "phase": "idle",
+    "queue_depth": 0,
+    "generating": false
+  },
   "server": { "port": 8080, "loopback_only": true },
   "model": {
     "id": "gemma-4-e4b-it-gpu",
@@ -58,6 +87,21 @@ The top-level `model` object tracks the model **selected in the app**
 }
 ```
 
+- `access.mode` is the active bind mode (`loopback`, `lan`, or
+  `tailscale`; see Access modes). `access.tailnet_ip` is the phone's
+  `100.x` tailnet IP, or `null` when the tailnet is not up.
+  `access.encrypted` is `true` only in Tailscale mode.
+- `throughput` token counts are estimated at ~4 chars/token (LiteRT-LM
+  exposes no token API) and are counted since server start.
+  `avg_tokens_per_sec` is end-to-end, including cold-engine build and
+  prefill; `avg_decode_tokens_per_sec` measures first-token to
+  last-token and is the number comparable to published GPU tok/s
+  figures. The `live_*` fields describe the in-flight request only
+  (zero or `null` when idle): `live_prefill_tokens_per_sec` is measured
+  from engine-ready, cold build excluded, and is `0` while queued or
+  building. `phase` breaks down what the in-flight request is doing;
+  `generating` stays `true` while a request holds the engine, including
+  prefill.
 - `engine.actual_backend` is proven only by a healthy cached engine:
   `GOOGLE_TENSOR_NPU` (NPU), `GPU_OPENCL` (GPU), or `CPU`; otherwise
   `unknown` (or `error` with `last_load_error` set). A valid chat response
