@@ -13,8 +13,13 @@ import com.google.gson.JsonElement
  *   `tool_calls`, so clients that always advertise tools (agent CLIs) still
  *   get plain-text generations. Forced `tool_choice` (anything but `"none"`,
  *   which the model honors trivially), tool follow-up turns, images, audio,
- *   multimodal parts, and `stop` remain rejected with explicit
- *   unsupported-feature errors — never silently ignored.
+ *   and multimodal parts remain rejected with explicit unsupported-feature
+ *   errors — never silently ignored.
+ * - `stop` is accepted (a string, or an array of non-empty strings) and
+ *   emulated client-side: the pinned engine has no per-request
+ *   stop-sequence API, so the route truncates the delivered text at the
+ *   first stop occurrence (see StopFilter). Malformed `stop` shapes fail
+ *   validation here.
  * - Sampling knobs are range-checked where the pinned engine implements them
  *   (temperature, top_p, top_k, max_tokens).
  */
@@ -56,9 +61,14 @@ object ChatValidation {
                 "tool_choice other than \"none\"/\"auto\" forces a tool call " +
                     "this server can never produce")
         }
-        if (isNonEmpty(req.stop)) {
-            return Failure(400, "unsupported_feature",
-                "stop sequences are not supported by the pinned inference engine")
+        // `stop` shape: a string, or an array whose every element is a
+        // non-empty string. Empty string / empty array mean "absent"
+        // (isNonEmpty semantics) and skip the check entirely. Anything
+        // else — numbers, objects, nested arrays, empty-string entries —
+        // cannot be honored as a stop contract and fails explicitly.
+        if (isNonEmpty(req.stop) && !isValidStopShape(req.stop)) {
+            return Failure(400, "invalid_request_error",
+                "stop must be a string or an array of non-empty strings")
         }
 
         // Roles and content, in order.
@@ -138,6 +148,46 @@ object ChatValidation {
         }
 
         return null
+    }
+
+    /**
+     * Parses the request's `stop` field into the stop sequences to
+     * emulate: a string becomes a one-element list, an array contributes
+     * its string entries, and an absent/empty `stop` yields an empty
+     * list (no emulation). Callers run [validate] first, which rejects
+     * malformed shapes, so non-string or empty-string array entries —
+     * unreachable on the validated path — are simply skipped here.
+     */
+    fun stopSequences(req: ChatRequest): List<String> {
+        val el = req.stop
+        if (el == null || el.isJsonNull) return emptyList()
+        if (el.isJsonPrimitive && el.asJsonPrimitive.isString) {
+            val s = el.asString
+            return if (s.isEmpty()) emptyList() else listOf(s)
+        }
+        if (el.isJsonArray) {
+            return el.asJsonArray.mapNotNull { entry ->
+                if (entry.isJsonPrimitive && entry.asJsonPrimitive.isString) {
+                    entry.asString.takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    /** True iff [el] is a string, or an array of only non-empty strings. */
+    private fun isValidStopShape(el: JsonElement?): Boolean {
+        if (el == null) return false
+        if (el.isJsonPrimitive && el.asJsonPrimitive.isString) return true
+        if (el.isJsonArray) {
+            return el.asJsonArray.all { entry ->
+                entry.isJsonPrimitive && entry.asJsonPrimitive.isString &&
+                    entry.asString.isNotEmpty()
+            }
+        }
+        return false
     }
 
     private fun isPresent(el: JsonElement?): Boolean {

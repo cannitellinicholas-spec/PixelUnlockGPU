@@ -62,8 +62,9 @@ import kotlinx.coroutines.withTimeout
  * `POST /v1/chat/completions` — OpenAI-compatible text chat.
  *
  * Handles request validation (strict: the model must equal the stable ID;
- * images/audio/stop and forced tool_choice are rejected explicitly, while a
- * declared `tools` array is accepted and ignored), per-client rate
+ * images/audio and forced tool_choice are rejected explicitly, while a
+ * declared `tools` array is accepted and ignored and `stop` sequences are
+ * emulated client-side — see [StopFilter]), per-client rate
  * limiting, bounded queue depth, engine acquisition on the catalog-declared
  * backend (no fallback), streaming SSE, non-streaming JSON, and timeout /
  * cancellation cleanup.
@@ -154,6 +155,10 @@ fun Route.chatRoute(
             )
             return@post
         }
+
+        // Parsed once, post-validation (shape is guaranteed there): the
+        // sequences the streaming/non-streaming paths emulate client-side.
+        val stopSequences = ChatValidation.stopSequences(req)
 
         val promptChars = req.messages.sumOf { it.textChars() }
         if (promptChars > maxChars) {
@@ -301,6 +306,7 @@ fun Route.chatRoute(
                                 promptChars = promptChars,
                                 gson = gson,
                                 serviceScope = serviceScope,
+                                stopSequences = stopSequences,
                                 onChunk = { chunk -> acc.add(chunk.length) },
                             )
                         } finally {
@@ -321,6 +327,11 @@ fun Route.chatRoute(
                 val finalMsg = result!!
                 val responseText = LlmMessageConverter.messageText(finalMsg)
                 RequestTracker.recordChunk(entry.id, responseText)
+                // Client-side stop emulation: the client sees the text
+                // truncated at the first stop occurrence, while the
+                // tracker above and the usage below keep counting the
+                // full responseText — generated chars, not visible chars.
+                val visibleText = StopFilter.truncate(responseText, stopSequences)
                 call.respond(ChatResponse(
                     id = responseId,
                     `object` = "chat.completion",
@@ -328,7 +339,7 @@ fun Route.chatRoute(
                     model = req.model,
                     choices = listOf(Choice(
                         index = 0,
-                        message = Message(role = "assistant", content = stringContent(responseText)),
+                        message = Message(role = "assistant", content = stringContent(visibleText)),
                         finishReason = "stop",
                     )),
                     usage = estimateUsage(promptChars, responseText.length),
@@ -391,6 +402,14 @@ fun Route.chatRoute(
     }
 }
 
+/**
+ * Control-flow signal that a stop sequence matched mid-stream. Deliberately
+ * NOT a [kotlinx.coroutines.CancellationException]: the route's catch arms
+ * read those as client cancellation. It is thrown and caught entirely
+ * inside [runInferenceStreaming], so it never reaches them.
+ */
+private class StopSequenceReached : Exception()
+
 private suspend fun runInferenceStreaming(
     conversation: com.google.ai.edge.litertlm.Conversation,
     prompt: LlmMessage,
@@ -400,6 +419,7 @@ private suspend fun runInferenceStreaming(
     promptChars: Int,
     gson: Gson,
     serviceScope: CoroutineScope,
+    stopSequences: List<String> = emptyList(),
     onChunk: (String) -> Unit = {},
 ) {
     val writeMutex = Mutex()
@@ -429,26 +449,61 @@ private suspend fun runInferenceStreaming(
         // the old length-sliced "cumulative" delta chopped spans and dropped
         // equal-length emissions — the streamed gibberish of 2026-10-01.
         val acc = StringBuilder()
-        conversation.sendMessageAsync(prompt, emptyMap()).collect { msg ->
-            val full = LlmMessageConverter.messageText(msg)
-            val delta = StreamReassembler.next(acc.toString(), full)
-            if (delta.isNotEmpty()) {
-                acc.append(delta)
-                onChunk(delta)
-                val chunkResp = StreamResponse(
+        // Client-side stop emulation (see StopFilter): acc/onChunk keep
+        // tracking the full generated text exactly as before — the tracker
+        // and the usage estimate below count generated chars — while the
+        // client only ever receives what the filter clears, which is never
+        // text past a stop occurrence.
+        val stopFilter = StopFilter(stopSequences)
+        try {
+            conversation.sendMessageAsync(prompt, emptyMap()).collect { msg ->
+                val full = LlmMessageConverter.messageText(msg)
+                val delta = StreamReassembler.next(acc.toString(), full)
+                if (delta.isNotEmpty()) {
+                    acc.append(delta)
+                    onChunk(delta)
+                    val out = stopFilter.onJoined(acc.toString())
+                    if (out.isNotEmpty()) {
+                        val chunkResp = StreamResponse(
+                            id = responseId,
+                            `object` = "chat.completion.chunk",
+                            created = System.currentTimeMillis() / 1000,
+                            model = modelName,
+                            choices = listOf(StreamChoice(0, StreamDelta(content = out), null)),
+                        )
+                        safeWrite("data: ${gson.toJson(chunkResp)}\n\n")
+                    }
+                    if (stopFilter.stopped) throw StopSequenceReached()
+                }
+            }
+        } catch (e: StopSequenceReached) {
+            // Stop matched: halt the engine so it stops generating text
+            // nobody will forward, then fall through to the normal final
+            // chunk — finish_reason "stop" is also the OpenAI-correct
+            // reason for a stop-sequence halt.
+            try { conversation.cancelProcess() } catch (_: Exception) {}
+        }
+        if (!stopFilter.stopped) {
+            // Stream ended without a stop: flush any suffix the filter
+            // held back as a possible partial stop.
+            val tail = stopFilter.finish(acc.toString())
+            if (tail.isNotEmpty()) {
+                val tailResp = StreamResponse(
                     id = responseId,
                     `object` = "chat.completion.chunk",
                     created = System.currentTimeMillis() / 1000,
                     model = modelName,
-                    choices = listOf(StreamChoice(0, StreamDelta(content = delta), null)),
+                    choices = listOf(StreamChoice(0, StreamDelta(content = tail), null)),
                 )
-                safeWrite("data: ${gson.toJson(chunkResp)}\n\n")
+                safeWrite("data: ${gson.toJson(tailResp)}\n\n")
             }
         }
         // acc holds the reassembled generated text: its deltas are the
         // same character stream the RequestTracker accumulator counts
         // via onChunk, so acc.length is the generated character count
-        // the usage estimate is derived from.
+        // the usage estimate is derived from. That stays true when a stop
+        // halted the stream early: usage counts generated chars (acc),
+        // not the possibly shorter forwarded chars.
         val finalResp = StreamResponse(
             id = responseId,
             `object` = "chat.completion.chunk",

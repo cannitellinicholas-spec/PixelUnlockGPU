@@ -161,12 +161,13 @@ Text chat. Request fields:
 | `top_p` | no | Finite, (0, 1] (default 0.95) |
 | `top_k` | no | ≥ 1 (default 40) |
 | `max_tokens` | no | 1–32768; `null` lets the bundle decide the KV budget |
+| `stop` | no | String or array of non-empty strings; emulated client-side (see the stop note below) |
 
 `tools` declarations are accepted and **ignored** (like llama.cpp-family
 servers): the model can never emit `tool_calls`, so agent clients that always
 advertise tools still get plain-text generations. Explicitly rejected with
 400 `unsupported_feature` (never silently ignored): `tool_choice` other than
-`"none"`/`"auto"` (it would force a call the server can't produce), `stop`,
+`"none"`/`"auto"` (it would force a call the server can't produce),
 `image_url` / audio / multimodal parts, `tool_calls`, `tool` roles.
 
 All error bodies are JSON regardless of the client `Accept` header, so
@@ -182,6 +183,15 @@ incremental `content` deltas, a final `finish_reason: "stop"` chunk, then
 exactly one `data: [DONE]` terminator. `: ka` heartbeat every 10s. Client
 disconnect cancels generation and frees the slot. Mid-stream failures close
 with an error chunk + `[DONE]`.
+
+Stop sequences: the engine has no per-request stop API, so `stop` is
+emulated client-side as a post-hoc match on the joined/reassembled text —
+a stop string split across token boundaries still matches, because the
+pieces meet in the joined text. The cost is small: up to (longest stop −
+1) trailing characters are held back while a partial match is possible,
+and when a stop matches, generation is cancelled and the stream finalizes
+with `finish_reason: "stop"` without forwarding any text past the stop.
+Non-streaming responses are truncated at the first stop occurrence.
 
 Non-streaming returns the final assistant message with `finish_reason:
 "stop"`. A `usage` object (`prompt_tokens` / `completion_tokens` /

@@ -18,8 +18,10 @@ import com.google.gson.annotations.SerializedName
  * Ported from localLLM's ApiTypes.kt (see docs/device-model-matrix.md for the
  * pinned source revision) with the MVP scope applied:
  * - text chat only — no tools, images, audio, or embeddings types;
- * - `tools` / `tool_choice` / `stop` are held as raw [JsonElement] so the
+ * - `tools` / `tool_choice` are held as raw [JsonElement] so the
  *   validator can reject them explicitly instead of silently ignoring them;
+ *   `stop` is held raw so the validator can parse its string-or-array
+ *   shape (it is emulated client-side, not rejected);
  * - adds `top_p`, which the pinned LiteRT-LM `SamplerConfig` supports.
  *
  * Field names follow the OpenAI Chat Completions contract; @SerializedName
@@ -169,8 +171,13 @@ data class ChatRequest(
     val tools: JsonElement? = null,
     @SerializedName("tool_choice") val toolChoice: JsonElement? = null,
     /**
+     * Polymorphic on the wire: a string, or an array of non-empty strings.
      * The pinned LiteRT-LM 0.12.0 `ConversationConfig` has no stop-sequence
-     * support (verified against the AAR), so any presence is rejected.
+     * support (verified against the AAR), so this is parsed by
+     * [ChatValidation.stopSequences] and emulated client-side: the route
+     * truncates the delivered text at the first stop occurrence (see
+     * StopFilter in the routes package). Malformed shapes are rejected by
+     * validation.
      */
     val stop: JsonElement? = null,
 )

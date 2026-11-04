@@ -1,6 +1,8 @@
 package com.nickzam.server.server.routes
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -67,5 +69,90 @@ class StreamReassemblerTest {
         val sentence = "The quick brown fox jumps over the lazy dog."
         val toks = sentence.split(" ").mapIndexed { i, w -> if (i == 0) w else " $w" }
         assertEquals(sentence, drain(toks))
+    }
+
+    // ---- StopFilter (issue #3: client-side stop-sequence emulation) ----
+
+    /**
+     * Mirrors the streaming route: reassemble each emission into the
+     * accumulator, feed the joined text to the filter per delta, stop
+     * feeding once the filter reports a stop, and flush with finish()
+     * when the stream ends unstopped. Returns (forwardedText, stopped).
+     */
+    private fun drainWithStops(
+        emissions: List<String>,
+        stops: List<String>,
+    ): Pair<String, Boolean> {
+        val acc = StringBuilder()
+        val filter = StopFilter(stops)
+        val forwarded = StringBuilder()
+        for (e in emissions) {
+            val delta = StreamReassembler.next(acc.toString(), e)
+            if (delta.isNotEmpty()) {
+                acc.append(delta)
+                forwarded.append(filter.onJoined(acc.toString()))
+                if (filter.stopped) break
+            }
+        }
+        if (!filter.stopped) forwarded.append(filter.finish(acc.toString()))
+        return forwarded.toString() to filter.stopped
+    }
+
+    @Test
+    fun `stop at chunk boundary forwards nothing past it`() {
+        val (text, stopped) = drainWithStops(
+            listOf("Hello", "\n\n", "World"), listOf("\n\n"))
+        assertEquals("Hello", text)
+        assertTrue(stopped)
+    }
+
+    @Test
+    fun `stop split across two chunks still matches`() {
+        // Neither chunk alone contains "\n\n"; the joined text does.
+        val (text, stopped) = drainWithStops(
+            listOf("Hello\n", "\nWorld"), listOf("\n\n"))
+        assertEquals("Hello", text)
+        assertTrue(stopped)
+    }
+
+    @Test
+    fun `no stop match forwards everything unstopped`() {
+        val (text, stopped) = drainWithStops(
+            listOf("Hello", " world"), listOf("\n\n"))
+        assertEquals("Hello world", text)
+        assertFalse(stopped)
+    }
+
+    @Test
+    fun `match in the very first chunk truncates it`() {
+        val (text, stopped) = drainWithStops(
+            listOf("Stop here\n\nand more"), listOf("\n\n"))
+        assertEquals("Stop here", text)
+        assertTrue(stopped)
+    }
+
+    @Test
+    fun `held-back stop prefix is flushed at end of stream`() {
+        // The trailing "\n" is a proper prefix of "\n\n", so onJoined
+        // holds it back; finish() must deliver it when no stop completes.
+        val (text, stopped) = drainWithStops(
+            listOf("Hello\n"), listOf("\n\n"))
+        assertEquals("Hello\n", text)
+        assertFalse(stopped)
+    }
+
+    @Test
+    fun `truncate cuts at the first stop occurrence`() {
+        assertEquals("a", StopFilter.truncate("a\n\nb", listOf("\n\n")))
+    }
+
+    @Test
+    fun `truncate leaves no-stop text unchanged`() {
+        assertEquals("a\nb", StopFilter.truncate("a\nb", listOf("\n\n")))
+    }
+
+    @Test
+    fun `truncate with stop at position zero is empty`() {
+        assertEquals("", StopFilter.truncate("\n\nb", listOf("\n\n")))
     }
 }

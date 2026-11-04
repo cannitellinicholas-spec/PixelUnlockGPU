@@ -113,16 +113,59 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(req))
     }
 
-    @Test fun `stop string is rejected`() {
+    @Test fun `stop as plain string validates`() {
+        // Issue #3: stop is emulated client-side, no longer rejected.
         val req = base().copy(stop = JsonParser.parseString(""""END""""))
-        val f = ChatValidation.validate(req)!!
-        assertEquals("unsupported_feature", f.type)
+        assertNull(ChatValidation.validate(req))
     }
 
-    @Test fun `stop list is rejected`() {
-        val req = base().copy(stop = JsonParser.parseString("""["a"]"""))
+    @Test fun `stop as array of strings validates`() {
+        val req = base().copy(stop = JsonParser.parseString("""["a", "\n\n"]"""))
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `stop with a numeric entry fails`() {
+        val req = base().copy(stop = JsonParser.parseString("""["a", 1]"""))
         val f = ChatValidation.validate(req)!!
-        assertEquals("unsupported_feature", f.type)
+        assertEquals(400, f.httpStatus)
+        assertEquals("invalid_request_error", f.type)
+    }
+
+    @Test fun `stop as a bare number fails`() {
+        val req = base().copy(stop = JsonParser.parseString("""1"""))
+        val f = ChatValidation.validate(req)!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("invalid_request_error", f.type)
+    }
+
+    @Test fun `stop with an empty-string entry fails`() {
+        val req = base().copy(stop = JsonParser.parseString("""["a", ""]"""))
+        val f = ChatValidation.validate(req)!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("invalid_request_error", f.type)
+    }
+
+    @Test fun `empty stop array validates as absent`() {
+        val req = base().copy(stop = JsonParser.parseString("""[]"""))
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `empty stop string validates as absent`() {
+        val req = base().copy(stop = JsonParser.parseString("\"\""))
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `stopSequences parses string array and absent`() {
+        val fromString = base().copy(stop = JsonParser.parseString(""""END""""))
+        assertEquals(listOf("END"), ChatValidation.stopSequences(fromString))
+
+        val fromArray = base().copy(stop = JsonParser.parseString("""["a", "\n\n"]"""))
+        assertEquals(listOf("a", "\n\n"), ChatValidation.stopSequences(fromArray))
+
+        assertEquals(emptyList<String>(), ChatValidation.stopSequences(base()))
+
+        val emptyArray = base().copy(stop = JsonParser.parseString("""[]"""))
+        assertEquals(emptyList<String>(), ChatValidation.stopSequences(emptyArray))
     }
 
     @Test fun `image_url part is rejected explicitly`() {
