@@ -17,6 +17,105 @@ import com.nickzam.server.inference.EngineRegistry
 import com.nickzam.server.messagesPrefixHash
 
 /**
+ * The cached-conversation facts [SessionReuse.decide] judges a request
+ * against, detached from any live `Conversation` so the decision is
+ * unit-testable on the JVM. Mirrors the fields of `SessionManager`'s
+ * private cached-session record that the reuse rule reads.
+ *
+ * [prefixHash] is a [Long]: that is what `messagesPrefixHash` returns.
+ */
+data class CachedState(
+    val engineKey: EngineKey,
+    val temperature: Float,
+    val topK: Int,
+    val topP: Float,
+    val prefixHash: Long,
+    val seenCount: Int,
+)
+
+/** Outcome of [SessionReuse.decide]. */
+enum class Decision { REUSE, FRESH }
+
+/**
+ * Pure KV prefix-reuse decision: no Android, no engine, no
+ * `SessionManager` instance state — only [Message], `messagesPrefixHash`
+ * and value comparisons — so it can be exercised directly from JVM tests.
+ */
+object SessionReuse {
+
+    /**
+     * Decide whether the request described by [messages] plus the
+     * request's own [engineKey] / [temperature] / [topK] / [topP] may
+     * reuse the conversation described by [cached], or must replay fresh.
+     *
+     * Contract — [Decision.FRESH] unless ALL of the following hold:
+     *  - [cached] is non-null;
+     *  - the cached engine key and sampler parameters (temperature, topK,
+     *    topP) equal the request's — a conversation warmed under another
+     *    engine or sampler is never reused;
+     *  - `cached.seenCount < messages.size` — there is at least one new
+     *    message beyond what the cached conversation already ingested;
+     *  - `cached.prefixHash == messagesPrefixHash(messages, cached.seenCount)`
+     *    — the request really does extend the cached prefix, rather than
+     *    replaying a divergent history under the same count;
+     *  - the tail (messages after `seenCount`) drives the conversation
+     *    forward with user turns only, and the request ends in a user
+     *    message — see below.
+     *
+     * Tail rule: let the "driving" messages be the tail messages whose
+     * role is not `"assistant"`. Reuse requires at least one driving
+     * message, every driving message to have role `"user"`, and the last
+     * message of the full list to have role `"user"`.
+     *
+     * (a) Intermediate new user turns are client-asserted context only
+     * and are NEVER fed to the engine: on reuse the caller sends only the
+     * final user message (which, under the ends-in-user rule, is
+     * `messages.last()`). Earlier new user turns in a multi-message tail
+     * are taken on the client's word as part of the replayed history;
+     * the engine's KV state is not updated with their text.
+     *
+     * (b) Ends-in-user rule: a tail must end in a user message. This is a
+     * deliberate tightening of the previous rule for tails such as
+     * `[user, assistant]`: that tail reused before (its last driving
+     * message is a user), but committing it would advance `seenCount`
+     * past an assistant message the engine never produced or saw,
+     * leaving the cached count claiming state the conversation does not
+     * hold. Ends-in-user is the safe rule for a chat tail.
+     *
+     * (c) Assistant messages in the tail are replay-only, never fed to
+     * the engine (pre-existing invariant): they are excluded from the
+     * driving set, and only the final user message is sent on reuse.
+     * An assistant-only tail therefore has no driving message and is
+     * [Decision.FRESH], as is any tail carrying a non-user, non-assistant
+     * role (e.g. a new `system` message) among its driving messages.
+     */
+    fun decide(
+        cached: CachedState?,
+        messages: List<Message>,
+        engineKey: EngineKey,
+        temperature: Float,
+        topK: Int,
+        topP: Float,
+    ): Decision {
+        if (cached == null) return Decision.FRESH
+        if (cached.engineKey != engineKey) return Decision.FRESH
+        if (cached.temperature != temperature || cached.topK != topK || cached.topP != topP) {
+            return Decision.FRESH
+        }
+        if (cached.seenCount >= messages.size) return Decision.FRESH
+        if (cached.prefixHash != messagesPrefixHash(messages, cached.seenCount)) {
+            return Decision.FRESH
+        }
+        val tail = messages.subList(cached.seenCount, messages.size)
+        val driving = tail.filter { it.role != "assistant" }
+        if (driving.isEmpty()) return Decision.FRESH
+        if (driving.any { it.role != "user" }) return Decision.FRESH
+        if (messages.last().role != "user") return Decision.FRESH
+        return Decision.REUSE
+    }
+}
+
+/**
  * Owns LiteRT-LM [Conversation] lifecycle and caching. Separated from the
  * chat route so the route can stay focused on HTTP wiring while this class
  * holds the bookkeeping that lets the engine reuse KV-cached conversations
@@ -111,35 +210,44 @@ class SessionManager(private val registry: EngineRegistry) {
         // replayed history grows and its hash changes each turn, so there is
         // no stable key to look up — we SCAN the (tiny) session LRU for a
         // warmed conversation on the same engine that already ingested this
-        // request's prefix, mirroring the explicit-session reuse rules: same
-        // engine + sampler params, seenCount < size, stored prefixHash
-        // matches hash(messages, seenCount), and exactly one trailing
-        // non-assistant (user) message. The matched conversation is
-        // re-keyed forward by commit() after a successful generation.
+        // request's prefix. The reuse rule itself lives in
+        // SessionReuse.decide (shared with the explicit-session path):
+        // same engine + sampler params, seenCount < size, stored prefixHash
+        // matches hash(messages, seenCount), and a tail whose driving
+        // (non-assistant) messages are all user, ending in a user message.
+        // The matched conversation is re-keyed forward by commit() after a
+        // successful generation.
         if (req.sessionId.isNullOrEmpty()) {
             val hit = sessions.snapshot().entries.firstOrNull { (_, s) ->
-                s.engineKey == acquired.cacheKey &&
-                    s.temperature == temperature && s.topK == topK && s.topP == topP &&
-                    s.seenCount < req.messages.size &&
-                    s.prefixHash == messagesPrefixHash(req.messages, s.seenCount) &&
-                    run {
-                        val newRange = req.messages.subList(s.seenCount, req.messages.size)
-                        val driving = newRange.filter { it.role != "assistant" }
-                        driving.size == 1 && driving[0].role == "user"
-                    }
+                SessionReuse.decide(
+                    cached = CachedState(
+                        engineKey = s.engineKey,
+                        temperature = s.temperature,
+                        topK = s.topK,
+                        topP = s.topP,
+                        prefixHash = s.prefixHash,
+                        seenCount = s.seenCount,
+                    ),
+                    messages = req.messages,
+                    engineKey = acquired.cacheKey,
+                    temperature = temperature,
+                    topK = topK,
+                    topP = topP,
+                ) == Decision.REUSE
             }
             if (hit != null) {
-                LogManager.i("SessionManager", "Auto-prefix cache hit (sending 1 new user turn)")
+                LogManager.i("SessionManager", "Auto-prefix cache hit (sending final new user turn)")
                 // Keep the slot under its original key: commit() refreshes
                 // seenCount/prefixHash in place after a successful
                 // generation, so the conversation is never re-keyed,
                 // duplicated, or closed under our feet.
+                // On reuse only the final user message is sent (decide()
+                // guarantees messages.last() is that user message); any
+                // intermediate new user turns are client-asserted context
+                // and are never fed to the engine.
                 return Resolved(
                     conversation = hit.value.conversation,
-                    prompt = LlmMessageConverter.apiToLlmMessage(
-                        req.messages.subList(hit.value.seenCount, req.messages.size)
-                            .first { it.role != "assistant" }
-                    ),
+                    prompt = LlmMessageConverter.apiToLlmMessage(req.messages.last()),
                     cacheKey = hit.key,
                     engineKey = acquired.cacheKey,
                     temperature = temperature,
@@ -155,26 +263,38 @@ class SessionManager(private val registry: EngineRegistry) {
         val cacheKey = "${req.sessionId}_${acquired.cacheKey.asString()}"
         val cached = sessions.get(cacheKey)
 
-        val canReuse = cached != null &&
-            cached.temperature == temperature &&
-            cached.topK == topK &&
-            cached.topP == topP &&
-            cached.seenCount < req.messages.size &&
-            cached.prefixHash == messagesPrefixHash(req.messages, cached.seenCount) &&
-            run {
-                val newRange = req.messages.subList(cached.seenCount, req.messages.size)
-                val driving = newRange.filter { it.role != "assistant" }
-                driving.size == 1 && driving[0].role == "user"
-            }
+        // Same SessionReuse.decide rule as the auto-prefix scan above.
+        // The explicit path historically carried no engineKey comparison
+        // of its own: the engine key is encoded in cacheKey, so a lookup
+        // hit is already on this engine. decide() still receives it (and
+        // the cached entry's own key) so both sites apply one rule.
+        val canReuse = SessionReuse.decide(
+            cached = cached?.let {
+                CachedState(
+                    engineKey = it.engineKey,
+                    temperature = it.temperature,
+                    topK = it.topK,
+                    topP = it.topP,
+                    prefixHash = it.prefixHash,
+                    seenCount = it.seenCount,
+                )
+            },
+            messages = req.messages,
+            engineKey = acquired.cacheKey,
+            temperature = temperature,
+            topK = topK,
+            topP = topP,
+        ) == Decision.REUSE
 
         if (canReuse) {
             cached!!
-            val newDriving = req.messages.subList(cached.seenCount, req.messages.size)
-                .first { it.role != "assistant" }
-            LogManager.i("SessionManager", "Session $cacheKey reused (sending 1 new ${newDriving.role} turn)")
+            // Only the final user message is sent (decide() guarantees
+            // messages.last() is that user message); intermediate new
+            // user turns are client-asserted context, never fed.
+            LogManager.i("SessionManager", "Session $cacheKey reused (sending final new user turn)")
             return Resolved(
                 conversation = cached.conversation,
-                prompt = LlmMessageConverter.apiToLlmMessage(newDriving),
+                prompt = LlmMessageConverter.apiToLlmMessage(req.messages.last()),
                 cacheKey = cacheKey,
                 engineKey = acquired.cacheKey,
                 temperature = temperature,
