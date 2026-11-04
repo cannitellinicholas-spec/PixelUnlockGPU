@@ -76,10 +76,11 @@ app/src/main/jniLibs/arm64-v8a/
 
 ## What's excluded from the MVP (by design)
 
-Text chat only: no tools/function calling, images, audio, `stop` sequences
-(all rejected explicitly on the wire), no embeddings, RAG, AICore, CORS,
-NSD discovery, or boot autostart. See the manifest for the full list and
-rationale.
+Text chat only: no tools/function calling, images, audio (all rejected
+explicitly on the wire), no embeddings, RAG, AICore, CORS, NSD discovery,
+or boot autostart. `stop` sequences are accepted and emulated client-side
+(the engine has no native stop API). See the manifest for the full list
+and rationale.
 
 ## By Usual Works
 

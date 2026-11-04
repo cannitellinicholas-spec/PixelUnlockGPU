@@ -129,8 +129,9 @@ call — TPU is branding; the NPU delegate + dispatch lib do the work.
 Signatures were read from the published AAR (`javap`), not copied from old
 fragments:
 
-- `ConversationConfig` has **no stop-sequence field** → `stop` is rejected
-  with an explicit 400 (`unsupported_feature`).
+- `ConversationConfig` has **no stop-sequence field** → the engine has
+  no native stop API, so `stop` is accepted and emulated client-side by
+  the route.
 - `SamplerConfig(topK: Int, topP: Double, temperature: Double, seed: Int)`
   → `top_p` is exposed (localLLM hardcodes 0.95; PixelUnlockGPU threads it through
   and tracks it in session reuse).
@@ -153,9 +154,10 @@ fragments:
 6. **HTTP ≠ NPU proof**: `/health.actual_backend` reports
    `GOOGLE_TENSOR_NPU` only when a healthy NPU engine is cached; NPU support
    is **not** verified until runtime evidence lands on the Pixel 10 Pro XL.
-7. **MVP scope**: text chat only. Tools, images, audio, `stop`, CORS,
+7. **MVP scope**: text chat only. Tools, images, audio, CORS,
    embeddings, RAG, NSD, boot autostart are excluded (rejected explicitly
-   where they appear on the wire).
+   where they appear on the wire). `stop` is not excluded: it is accepted
+   and emulated client-side (the engine has no native stop API).
 
 ## 7. Target device (to be filled at Gate 1)
 

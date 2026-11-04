@@ -161,7 +161,7 @@ Text chat. Request fields:
 | `top_p` | no | Finite, (0, 1] (default 0.95) |
 | `top_k` | no | ≥ 1 (default 40) |
 | `max_tokens` | no | 1–32768; `null` lets the bundle decide the KV budget |
-| `stop` | no | String or array of non-empty strings; emulated client-side (see the stop note below) |
+| `stop` | no | String or array of non-empty strings, up to 4 sequences; emulated client-side (see the stop note below) |
 
 `tools` declarations are accepted and **ignored** (like llama.cpp-family
 servers): the model can never emit `tool_calls`, so agent clients that always
@@ -192,6 +192,9 @@ pieces meet in the joined text. The cost is small: up to (longest stop −
 and when a stop matches, generation is cancelled and the stream finalizes
 with `finish_reason: "stop"` without forwarding any text past the stop.
 Non-streaming responses are truncated at the first stop occurrence.
+When a stop cuts a generation, the cached conversation is dropped
+instead of committed — its KV holds the untruncated text — so the next
+turn in that session replays fresh rather than reusing divergent state.
 
 Non-streaming returns the final assistant message with `finish_reason:
 "stop"`. A `usage` object (`prompt_tokens` / `completion_tokens` /

@@ -124,6 +124,19 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(req))
     }
 
+    @Test fun `stop array of 4 validates`() {
+        val req = base().copy(stop = JsonParser.parseString("""["a", "b", "c", "d"]"""))
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `stop array of 5 fails`() {
+        val req = base().copy(stop = JsonParser.parseString("""["a", "b", "c", "d", "e"]"""))
+        val f = ChatValidation.validate(req)!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("invalid_request_error", f.type)
+        assertTrue(f.message.contains("4"))
+    }
+
     @Test fun `stop with a numeric entry fails`() {
         val req = base().copy(stop = JsonParser.parseString("""["a", 1]"""))
         val f = ChatValidation.validate(req)!!

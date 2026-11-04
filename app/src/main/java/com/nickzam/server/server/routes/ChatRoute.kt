@@ -212,6 +212,7 @@ fun Route.chatRoute(
 
         var resolved: SessionManager.Resolved? = null
         var inferenceOk = false
+        var stopFired = false
         var streamWriter: ByteWriteChannel? = null
         // Serialize the whole request against the engine: LiteRT-LM allows
         // one live conversation per engine, and resolve() closes/replaces
@@ -297,7 +298,7 @@ fun Route.chatRoute(
                     withTimeout(timeoutMs) {
                     acquireWakeLock(timeoutMs) {
                         try {
-                            runInferenceStreaming(
+                            stopFired = runInferenceStreaming(
                                 conversation = resolvedLocal.conversation,
                                 prompt = resolvedLocal.prompt,
                                 writer = this@respondBytesWriter,
@@ -332,6 +333,7 @@ fun Route.chatRoute(
                 // tracker above and the usage below keep counting the
                 // full responseText — generated chars, not visible chars.
                 val visibleText = StopFilter.truncate(responseText, stopSequences)
+                stopFired = visibleText != responseText
                 call.respond(ChatResponse(
                     id = responseId,
                     `object` = "chat.completion",
@@ -391,7 +393,13 @@ fun Route.chatRoute(
             val r = resolved
             if (r != null) {
                 if (r.isCached) {
-                    if (inferenceOk) sessionManager.commit(r, req.messages)
+                    // A stop-fired success must invalidate, not commit: the
+                    // conversation's KV holds the untruncated generation
+                    // while the client's history holds only the truncated
+                    // text, so committing would let prefix reuse fire
+                    // against a divergent history and the model would
+                    // silently condition on hidden post-stop text.
+                    if (inferenceOk && !stopFired) sessionManager.commit(r, req.messages)
                     else sessionManager.invalidate(r)
                 } else {
                     sessionManager.closeIfStateless(r)
@@ -421,7 +429,7 @@ private suspend fun runInferenceStreaming(
     serviceScope: CoroutineScope,
     stopSequences: List<String> = emptyList(),
     onChunk: (String) -> Unit = {},
-) {
+): Boolean {
     val writeMutex = Mutex()
     suspend fun safeWrite(s: String) {
         writeMutex.withLock {
@@ -514,6 +522,7 @@ private suspend fun runInferenceStreaming(
         )
         safeWrite("data: ${gson.toJson(finalResp)}\n\n")
         safeWrite("data: [DONE]\n\n")
+        return stopFilter.stopped
     } finally {
         heartbeat.cancel()
     }

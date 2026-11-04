@@ -70,6 +70,14 @@ object ChatValidation {
             return Failure(400, "invalid_request_error",
                 "stop must be a string or an array of non-empty strings")
         }
+        // Cap at 4 sequences total (a plain string counts as 1) — OpenAI's
+        // documented maximum for this parameter; it also bounds the
+        // filter's per-emission rescan cost.
+        val stopEl = req.stop
+        if (stopEl != null && stopEl.isJsonArray && stopEl.asJsonArray.size() > 4) {
+            return Failure(400, "invalid_request_error",
+                "stop must contain at most 4 sequences (got ${stopEl.asJsonArray.size()})")
+        }
 
         // Roles and content, in order.
         for ((i, m) in req.messages.withIndex()) {
