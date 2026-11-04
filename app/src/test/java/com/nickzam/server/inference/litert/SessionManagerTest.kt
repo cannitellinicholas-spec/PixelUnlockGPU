@@ -143,9 +143,10 @@ class SessionManagerTest {
     }
 
     @Test fun `user then assistant tail is fresh`() {
-        // Deliberate edge change: this tail reused under the old
-        // last-driving-message rule, but committing it would advance
-        // seenCount past an assistant message the engine never saw.
+        // Ends-in-user guarantees a well-defined send target:
+        // messages.last() is the final user turn, the prompt the
+        // generation answers. A tail ending in an assistant message
+        // has no user prompt after it to answer.
         val messages = prior + listOf(user("more"), assistant("replayed reply"))
         val cached = cachedState(messages, seenCount = prior.size)
         assertEquals(Decision.FRESH, decide(cached, messages))
