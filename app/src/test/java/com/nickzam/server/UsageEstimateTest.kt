@@ -1,6 +1,7 @@
 package com.nickzam.server
 
 import com.google.gson.Gson
+import com.nickzam.server.server.routes.StreamReassembler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,10 +39,42 @@ class UsageEstimateTest {
         }
     }
 
-    @Test fun `completion tokens match reassembled text length divided by four`() {
-        val reassembled = "some text"
-        val usage = estimateUsage(promptChars = 20, completionChars = reassembled.length)
-        assertEquals(reassembled.length / 4, usage.completionTokens)
+    @Test fun `streamed usage completion tokens match reassembled text length over four`() {
+        // Mirrors runInferenceStreaming in ChatRoute: each emission goes
+        // through StreamReassembler.next against the text accumulated so
+        // far, and only non-empty deltas are appended to acc — the same
+        // acc whose length feeds estimateUsage for the final chunk.
+        val cases = listOf(
+            // Incremental: each emission is only the new token.
+            listOf("The", " quick", " brown", " fox") to "The quick brown fox",
+            // Cumulative: each emission repeats the whole text so far.
+            listOf("The", "The quick", "The quick brown") to "The quick brown",
+        )
+        for ((emissions, expected) in cases) {
+            val acc = StringBuilder()
+            for (full in emissions) {
+                val delta = StreamReassembler.next(acc.toString(), full)
+                if (delta.isNotEmpty()) {
+                    acc.append(delta)
+                }
+            }
+            assertEquals(expected, acc.toString())
+
+            val usage = estimateUsage(promptChars = 20, completionChars = acc.length)
+            assertEquals(acc.length / 4, usage.completionTokens)
+
+            // The final chunk runInferenceStreaming actually emits.
+            val finalChunk = StreamResponse(
+                id = "chatcmpl-1",
+                `object` = "chat.completion.chunk",
+                created = 123L,
+                model = "test-model",
+                choices = listOf(StreamChoice(0, StreamDelta(), "stop")),
+                usage = usage,
+            )
+            val json = Gson().toJson(finalChunk)
+            assertTrue(json.contains("\"completion_tokens\":${acc.length / 4}"))
+        }
     }
 
     @Test fun `chat response serializes usage with openai keys`() {
