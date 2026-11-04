@@ -175,12 +175,44 @@ data class ChatRequest(
     val stop: JsonElement? = null,
 )
 
+/**
+ * OpenAI-shaped token usage block.
+ *
+ * The counts are estimates: LiteRT-LM 0.12.0 exposes no token-count API,
+ * so they are derived from character counts at ~4 chars/token (the same
+ * estimate used for the `/health` throughput figures). They are
+ * approximate, not exact token accounting.
+ */
+data class Usage(
+    @SerializedName("prompt_tokens") val promptTokens: Int,
+    @SerializedName("completion_tokens") val completionTokens: Int,
+    @SerializedName("total_tokens") val totalTokens: Int
+)
+
+/**
+ * Estimate [Usage] from character counts at ~4 chars/token.
+ *
+ * Uses integer division, matching the `/health` throughput estimate.
+ * [Usage.totalTokens] is the sum of the two emitted numbers, so the
+ * block is internally consistent.
+ */
+fun estimateUsage(promptChars: Int, completionChars: Int): Usage {
+    val promptTokens = promptChars / 4
+    val completionTokens = completionChars / 4
+    return Usage(
+        promptTokens = promptTokens,
+        completionTokens = completionTokens,
+        totalTokens = promptTokens + completionTokens
+    )
+}
+
 data class ChatResponse(
     val id: String,
     val `object`: String,
     val created: Long,
     val model: String,
-    val choices: List<Choice>
+    val choices: List<Choice>,
+    val usage: Usage? = null
 )
 
 data class Choice(
@@ -194,7 +226,8 @@ data class StreamResponse(
     val `object`: String,
     val created: Long,
     val model: String,
-    val choices: List<StreamChoice>
+    val choices: List<StreamChoice>,
+    val usage: Usage? = null
 )
 
 data class StreamChoice(

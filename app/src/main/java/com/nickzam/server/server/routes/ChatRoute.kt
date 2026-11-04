@@ -28,6 +28,7 @@ import com.nickzam.server.inference.EngineRegistry
 import com.nickzam.server.inference.litert.LlmMessageConverter
 import com.nickzam.server.inference.litert.SessionManager
 import com.nickzam.server.server.auth.authorize
+import com.nickzam.server.estimateUsage
 import com.nickzam.server.stringContent
 import com.nickzam.server.textChars
 import io.ktor.http.CacheControl
@@ -297,6 +298,7 @@ fun Route.chatRoute(
                                 writer = this@respondBytesWriter,
                                 responseId = responseId,
                                 modelName = req.model,
+                                promptChars = promptChars,
                                 gson = gson,
                                 serviceScope = serviceScope,
                                 onChunk = { chunk -> acc.add(chunk.length) },
@@ -329,6 +331,7 @@ fun Route.chatRoute(
                         message = Message(role = "assistant", content = stringContent(responseText)),
                         finishReason = "stop",
                     )),
+                    usage = estimateUsage(promptChars, responseText.length),
                 ))
             }
             inferenceOk = true
@@ -394,6 +397,7 @@ private suspend fun runInferenceStreaming(
     writer: ByteWriteChannel,
     responseId: String,
     modelName: String,
+    promptChars: Int,
     gson: Gson,
     serviceScope: CoroutineScope,
     onChunk: (String) -> Unit = {},
@@ -441,12 +445,17 @@ private suspend fun runInferenceStreaming(
                 safeWrite("data: ${gson.toJson(chunkResp)}\n\n")
             }
         }
+        // acc holds the reassembled generated text: its deltas are the
+        // same character stream the RequestTracker accumulator counts
+        // via onChunk, so acc.length is the generated character count
+        // the usage estimate is derived from.
         val finalResp = StreamResponse(
             id = responseId,
             `object` = "chat.completion.chunk",
             created = System.currentTimeMillis() / 1000,
             model = modelName,
             choices = listOf(StreamChoice(0, StreamDelta(), "stop")),
+            usage = estimateUsage(promptChars, acc.length),
         )
         safeWrite("data: ${gson.toJson(finalResp)}\n\n")
         safeWrite("data: [DONE]\n\n")

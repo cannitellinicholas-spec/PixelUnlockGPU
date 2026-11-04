@@ -184,8 +184,11 @@ disconnect cancels generation and frees the slot. Mid-stream failures close
 with an error chunk + `[DONE]`.
 
 Non-streaming returns the final assistant message with `finish_reason:
-"stop"`. No usage block is emitted (counts are omitted rather than
-fabricated).
+"stop"`. A `usage` object (`prompt_tokens` / `completion_tokens` /
+`total_tokens`) is emitted on the non-streaming response and on the
+final streamed chunk. The counts are estimates — estimated from
+generated characters at ~4 chars/token; the runtime exposes no token
+accounting.
 
 ### Status codes
 
