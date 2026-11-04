@@ -8,16 +8,22 @@ With no key set, the server is open (loopback default).
 
 ## Access modes
 
-Set in the app; `/health` reports the active mode in its `access` block.
+Set in the app; `/health` reports the selected mode in its `access` block.
 
 - **Loopback** (default): binds `127.0.0.1` only.
-- **LAN**: binds `0.0.0.0`. Unencrypted; requires the bearer key.
+- **LAN**: binds `0.0.0.0`. Unencrypted; the bearer key is required only
+  if one is set — with no key set the server is open on the LAN, so set a
+  key before enabling LAN.
 - **Tailscale**: binds the phone's `100.x` tailnet IP. Traffic is
   WireGuard-encrypted end-to-end. Takes precedence over LAN when both
   toggles are on.
 
 In Tailscale mode with the tailnet down, the server falls back to
-loopback — it never falls back to `0.0.0.0`.
+loopback — it never falls back to `0.0.0.0`. `/health` does not expose
+that fallback: its `access.mode`, `access.encrypted`, and
+`server.loopback_only` derive from the selected mode, not the actual
+bound host, so the loopback-bound server still reports mode `tailscale`,
+`encrypted: true`, and `loopback_only: false`.
 
 ## `GET /health`
 
@@ -87,9 +93,11 @@ The top-level `model` object tracks the model **selected in the app**
 }
 ```
 
-- `access.mode` is the active bind mode (`loopback`, `lan`, or
+- `access.mode` is the selected mode (`loopback`, `lan`, or
   `tailscale`; see Access modes). `access.tailnet_ip` is the phone's
-  `100.x` tailnet IP, or `null` when the tailnet is not up.
+  `100.x` tailnet IP, or `null` when the tailnet is not up — reported in
+  every mode, so in loopback or LAN mode with a `100.x` interface up it
+  is that IP, not `null`.
   `access.encrypted` is `true` only in Tailscale mode.
 - `throughput` token counts are estimated at ~4 chars/token (LiteRT-LM
   exposes no token API) and are counted since server start.
@@ -99,9 +107,12 @@ The top-level `model` object tracks the model **selected in the app**
   figures. The `live_*` fields describe the in-flight request only
   (zero or `null` when idle): `live_prefill_tokens_per_sec` is measured
   from engine-ready, cold build excluded, and is `0` while queued or
-  building. `phase` breaks down what the in-flight request is doing;
-  `generating` stays `true` while a request holds the engine, including
-  prefill.
+  building. `phase` breaks down what the in-flight request is doing:
+  `engine_start`, `prefill`, or `decode` while a request is in flight;
+  with no request in flight, `queued` when the queue is non-empty and
+  `idle` otherwise. `generating` is `true` whenever a request is in
+  flight — including the engine-build phase (`engine_start`), before any
+  engine is held, and prefill.
 - `engine.actual_backend` is proven only by a healthy cached engine:
   `GOOGLE_TENSOR_NPU` (NPU), `GPU_OPENCL` (GPU), or `CPU`; otherwise
   `unknown` (or `error` with `last_load_error` set). A valid chat response
