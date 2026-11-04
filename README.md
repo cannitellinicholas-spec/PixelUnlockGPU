@@ -1,4 +1,12 @@
+![Usual Works — PixelUnlockGPU](brand/banner.svg)
+
 # PixelUnlockGPU — Pixel 10 Pro XL LiteRT-LM OpenAI server
+
+A [Usual Works](https://github.com/cannitellinicholas-spec) project — the most unusual usual.
+
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-0F35B8)](LICENSE)
+[![Platform: Android](https://img.shields.io/badge/platform-Android-1C1C1C)](#build)
+[![Hardware: Tensor G5 TPU](https://img.shields.io/badge/hardware-Tensor%20G5%20TPU-C9A227)](#build)
 
 One Android app that serves **Gemma 4 E2B on the Tensor G5 TPU** over an
 OpenAI-compatible HTTP API for TypingMind and other clients.
@@ -73,6 +81,10 @@ Text chat only: no tools/function calling, images, audio, `stop` sequences
 NSD discovery, or boot autostart. See the manifest for the full list and
 rationale.
 
+## By Usual Works
+
+PixelUnlockGPU is built by [Usual Works](https://github.com/cannitellinicholas-spec) — the most unusual usual.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
@@ -95,3 +107,7 @@ This app is a derivative work, built with real credit where it's due:
 
 If you reuse this code, keep the LICENSE, NOTICE, and the per-file
 attribution headers, and you're in good standing with all three upstreams.
+
+---
+
+© 2026 Usual Works

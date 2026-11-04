@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" role="img" aria-labelledby="title">
+  <title id="title">Usual Works — PixelUnlockGPU</title>
+  <rect width="1200" height="300" fill="#F6F1E6"/>
+  <text x="600" y="152" text-anchor="middle" font-family="'Inter Display Black','Inter',sans-serif" font-weight="900" font-size="80">
+    <tspan fill="#0F35B8">Usual</tspan><tspan fill="#1C1C1C"> PixelUnlockGPU</tspan>
+  </text>
+  <rect x="520" y="192" width="160" height="3" fill="#C9A227"/>
+  <text x="600" y="248" text-anchor="middle" font-family="'Inter',sans-serif" font-size="30" fill="#1C1C1C">Pixel 10 Pro XL LiteRT-LM OpenAI server</text>
+</svg>
