@@ -72,15 +72,29 @@ object SessionReuse {
      * final user message (which, under the ends-in-user rule, is
      * `messages.last()`). Earlier new user turns in a multi-message tail
      * are taken on the client's word as part of the replayed history;
-     * the engine's KV state is not updated with their text.
+     * the engine's KV state is not updated with their text. Accepted
+     * cost, in plain terms: those skipped intermediate user turns are
+     * permanently absent from the engine's context, and no later reuse
+     * check can detect the gap — `prefixHash` is computed over the
+     * client's messages only, so the history `commit` records matches
+     * the client's list whether or not the engine ever saw every turn
+     * in it. This is the mirror image of the issue-#3 stop case: there
+     * the engine's KV ran ahead of the client, so the route invalidates
+     * the session; here the client's history runs ahead of the engine,
+     * accepted deliberately for prefix-reuse latency.
      *
-     * (b) Ends-in-user rule: a tail must end in a user message. This is a
-     * deliberate tightening of the previous rule for tails such as
-     * `[user, assistant]`: that tail reused before (its last driving
-     * message is a user), but committing it would advance `seenCount`
-     * past an assistant message the engine never produced or saw,
-     * leaving the cached count claiming state the conversation does not
-     * hold. Ends-in-user is the safe rule for a chat tail.
+     * (b) Ends-in-user rule: a tail must end in a user message, so that
+     * reuse has a well-defined send target: `messages.last()` is the
+     * final user turn, the prompt the generation answers, and that is
+     * the one message the caller sends. A tail ending in an assistant
+     * message (e.g. `[user, assistant]`, which the previous
+     * last-driving-message rule reused) has no user prompt after it to
+     * answer — there is nothing for the reused conversation to respond
+     * to. The check is also defence-in-depth: `resolve`'s preamble
+     * already rejects any request whose last non-system message is not
+     * a user message; this rule additionally pins the last message of
+     * the full list, system messages included, inside the pure decision
+     * itself.
      *
      * (c) Assistant messages in the tail are replay-only, never fed to
      * the engine (pre-existing invariant): they are excluded from the
@@ -268,6 +282,13 @@ class SessionManager(private val registry: EngineRegistry) {
         // of its own: the engine key is encoded in cacheKey, so a lookup
         // hit is already on this engine. decide() still receives it (and
         // the cached entry's own key) so both sites apply one rule.
+        // Equivalence with that lookup-key scheme relies on
+        // EngineKey.asString() being injective over the reachable
+        // catalog, which holds because catalog model IDs contain no "_"
+        // (both ids in ModelCatalog are hyphen-separated) and maxTokens
+        // renders as a bare integer or "model": the first two "_"
+        // boundaries are therefore unambiguous and the backend name is
+        // the remaining suffix.
         val canReuse = SessionReuse.decide(
             cached = cached?.let {
                 CachedState(

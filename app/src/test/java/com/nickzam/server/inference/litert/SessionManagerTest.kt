@@ -27,6 +27,7 @@ class SessionManagerTest {
     private fun user(text: String) = Message("user", stringContent(text))
     private fun assistant(text: String) = Message("assistant", stringContent(text))
     private fun system(text: String) = Message("system", stringContent(text))
+    private fun tool(text: String) = Message("tool", stringContent(text))
 
     /** A cached state whose prefixHash genuinely matches [messages] up to [seenCount]. */
     private fun cachedState(messages: List<Message>, seenCount: Int): CachedState =
@@ -61,6 +62,30 @@ class SessionManagerTest {
         val messages = prior + user("more")
         val cached = cachedState(messages, seenCount = prior.size).copy(
             engineKey = EngineKey(STABLE_MODEL_ID, null, Backend.LITERT_NPU),
+        )
+        assertEquals(Decision.FRESH, decide(cached, messages))
+    }
+
+    @Test fun `engine mismatch on model id only is fresh`() {
+        val messages = prior + user("more")
+        val cached = cachedState(messages, seenCount = prior.size).copy(
+            engineKey = EngineKey(STABLE_MODEL_ID, null, Backend.LITERT_GPU),
+        )
+        assertEquals(Decision.FRESH, decide(cached, messages))
+    }
+
+    @Test fun `engine mismatch on backend only is fresh`() {
+        val messages = prior + user("more")
+        val cached = cachedState(messages, seenCount = prior.size).copy(
+            engineKey = EngineKey(GPU_MODEL_ID, null, Backend.LITERT_NPU),
+        )
+        assertEquals(Decision.FRESH, decide(cached, messages))
+    }
+
+    @Test fun `engine mismatch on maxTokens only is fresh`() {
+        val messages = prior + user("more")
+        val cached = cachedState(messages, seenCount = prior.size).copy(
+            engineKey = EngineKey(GPU_MODEL_ID, 1024, Backend.LITERT_GPU),
         )
         assertEquals(Decision.FRESH, decide(cached, messages))
     }
@@ -134,6 +159,21 @@ class SessionManagerTest {
 
     @Test fun `new system message in tail is fresh`() {
         val messages = prior + listOf(system("new instructions"), user("more"))
+        val cached = cachedState(messages, seenCount = prior.size)
+        assertEquals(Decision.FRESH, decide(cached, messages))
+    }
+
+    @Test fun `user then system tail is fresh`() {
+        val messages = prior + listOf(user("more"), system("trailing instructions"))
+        val cached = cachedState(messages, seenCount = prior.size)
+        assertEquals(Decision.FRESH, decide(cached, messages))
+    }
+
+    @Test fun `tool then user tail is fresh`() {
+        // decide() is pure and sits below the API validation layer
+        // (which rejects the "tool" role upstream), so the role is
+        // constructed directly here to pin decide()'s own rule.
+        val messages = prior + listOf(tool("tool result"), user("more"))
         val cached = cachedState(messages, seenCount = prior.size)
         assertEquals(Decision.FRESH, decide(cached, messages))
     }
