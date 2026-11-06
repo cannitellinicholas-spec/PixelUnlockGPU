@@ -1,6 +1,6 @@
 ![Usual Works — PixelUnlockGPU](brand/banner.svg)
 
-# PixelUnlockGPU — Pixel 10 Pro XL LiteRT-LM OpenAI server
+# PixelServer — Pixel 10 Pro XL on-device OpenAI server
 
 A [Usual Works](https://github.com/cannitellinicholas-spec) project — the most unusual usual.
 
@@ -8,14 +8,19 @@ A [Usual Works](https://github.com/cannitellinicholas-spec) project — the most
 [![Platform: Android](https://img.shields.io/badge/platform-Android-1C1C1C)](#build)
 [![Hardware: Tensor G5 TPU](https://img.shields.io/badge/hardware-Tensor%20G5%20TPU-C9A227)](#build)
 
-One Android app that serves **Gemma 4 E2B on the Tensor G5 TPU** over an
-OpenAI-compatible HTTP API for TypingMind and other clients.
+One Android app that serves on-device models over an OpenAI-compatible HTTP
+API for TypingMind and other clients:
+
+- **Gemma 4** (E2B/E4B bundles) on the Tensor G5 / GPU / CPU via LiteRT-LM,
+- **Gemini Nano (Fast)** delegated to the AICore system service through the
+  ML Kit GenAI Prompt API (model ID `gemini-nano-fast`; FAST preference
+  only — AICore's FULL preview bundle fails inference on this firmware).
 
 - Server/lifecycle foundation ported from **localLLM** (Ktor HTTP server,
   OpenAI routes, foreground service, engine registry).
 - Tensor G5 model/runtime path ported from **Box** (artifact coordinates,
   NPU backend setup, GoogleTensor dispatch library).
-- Stable model ID: **`gemma-4-e2b-it-tpu-g5`**.
+- Stable model ID (LiteRT): **`gemma-4-e2b-it-tpu-g5`**.
 - Status: Gate 0 (audit) complete; device gates pending a Pixel 10 Pro XL.
 
 See [docs/device-model-matrix.md](docs/device-model-matrix.md) for the pinned
@@ -41,7 +46,7 @@ default to 8080).
 ## Use
 
 1. Install the APK on the Pixel 10 Pro XL.
-2. Open PixelUnlockGPU → **Download** the model (~3.1 GB; SHA-256 verified before
+2. Open PixelServer → **Download** the model (~3.1 GB; SHA-256 verified before
    load) or **Import** a `.litertlm` file.
 3. **Start** the server (loopback `127.0.0.1:8080` by default).
 4. Point TypingMind at `http://127.0.0.1:8080/v1` with model

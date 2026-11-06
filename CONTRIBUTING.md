@@ -1,4 +1,4 @@
-# Contributing to PixelUnlockGPU
+# Contributing to PixelServer
 
 Contributions are welcome — bug fixes, docs, new endpoints, backend work.
 The fastest path to a merged PR is a small, focused change with a passing
@@ -56,7 +56,7 @@ This project is Apache 2.0 and is itself a derivative of
 
 ## What I'm looking for
 
-Issues labeled [`good first issue`](https://github.com/cannitellinicholas-spec/PixelUnlockGPU/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+Issues labeled [`good first issue`](https://github.com/cannitellinicholas-spec/PixelServer/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 are scoped for a first PR and I'll answer questions on them quickly.
 The Tensor G5 NPU tracking issue is the big prize and needs a device.
 

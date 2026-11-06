@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.nickzam.server.AVAILABLE_MODELS
 import com.nickzam.server.BuildConfig
+import com.nickzam.server.DEFAULT_MODEL
 import com.nickzam.server.LogManager
 import com.nickzam.server.ModelData
 import com.nickzam.server.ModelListResponse
@@ -23,24 +24,38 @@ import kotlinx.coroutines.withTimeout
 /**
  * `GET /v1/models` — OpenAI-shaped model index.
  *
- * Lists **installed** models only: the stable catalog entry appears iff its
- * `.litertlm` bundle is on disk. Anything else on disk (unknown files) is
- * not loadable under strict model resolution, so it is not advertised.
+ * Lists models the client can actually call: LiteRT entries appear iff their
+ * `.litertlm` bundle is on disk; hosted entries (Gemini Nano via AICore)
+ * appear when their availability probe resolves AVAILABLE (probed live, since
+ * AICore owns the weights). Anything else on disk (unknown files) is not
+ * loadable under strict model resolution, so it is not advertised.
  */
 fun Route.modelsRoute(
     appContext: Context,
     engineRegistry: EngineRegistry,
+    nanoEngine: com.nickzam.server.inference.aicore.NanoEngine,
 ) {
     get("/v1/models") {
         if (!authorize(call, appContext)) return@get
         val data = AVAILABLE_MODELS.mapNotNull { info ->
-            val file = engineRegistry.modelFileFor(info)
-            if (!file.exists()) return@mapNotNull null
-            ModelData(
-                id = info.id,
-                created = file.lastModified() / 1000,
-                ownedBy = "pixelunlockgpu-" + info.backend.name.lowercase(),
-            )
+            if (info.hosted) {
+                // Hosted lane: "installed" means AICore reports AVAILABLE.
+                if (nanoEngine.status() != com.google.mlkit.genai.common.FeatureStatus.AVAILABLE)
+                    return@mapNotNull null
+                ModelData(
+                    id = info.id,
+                    created = System.currentTimeMillis() / 1000,
+                    ownedBy = "pixelserver-" + info.backend.name.lowercase(),
+                )
+            } else {
+                val file = engineRegistry.modelFileFor(info)
+                if (!file.exists()) return@mapNotNull null
+                ModelData(
+                    id = info.id,
+                    created = file.lastModified() / 1000,
+                    ownedBy = "pixelserver-" + info.backend.name.lowercase(),
+                )
+            }
         }
         call.respond(ModelListResponse(data = data))
     }
@@ -65,10 +80,13 @@ fun Route.healthRoute(
     engineRegistry: EngineRegistry,
     appContext: Context,
     inferenceMutex: kotlinx.coroutines.sync.Mutex,
+    nanoEngine: com.nickzam.server.inference.aicore.NanoEngine,
 ) {
     get("/health") {
         if (!authorize(call, appContext)) return@get
-        call.respond(healthSnapshot(engineRegistry, appContext))
+        // Hosted-lane probe (cached ~15 s inside NanoEngine so polling is cheap).
+        val nanoStatus = nanoEngine.status()
+        call.respond(healthSnapshot(engineRegistry, appContext, nanoStatus))
     }
 
     /**
@@ -86,7 +104,7 @@ fun Route.healthRoute(
         val modelId = if (modelParam.isNullOrEmpty())
             com.nickzam.server.Settings.selectedModelId(appContext) else modelParam
         val t0 = System.nanoTime()
-        try {
+        val warmInfo = try {
             engineRegistry.resolveModelInfo(modelId)
         } catch (e: IllegalArgumentException) {
             call.respond(
@@ -98,6 +116,59 @@ fun Route.healthRoute(
                     "ms" to (System.nanoTime() - t0) / 1_000_000,
                 ),
             )
+            return@post
+        }
+        // Hosted lane (Gemini Nano): no engine to build — warm means the
+        // AICore probe is AVAILABLE and one short generation comes back.
+        if (warmInfo.hosted) {
+            try {
+                withTimeout(60_000L) {
+                    inferenceMutex.withLock {
+                        nanoEngine.generate(
+                            chat = com.nickzam.server.ChatRequest(
+                                model = modelId,
+                                messages = listOf(
+                                    com.nickzam.server.Message(
+                                        role = "user",
+                                        content = com.nickzam.server.stringContent("Hi"),
+                                    ),
+                                ),
+                                maxTokens = 16,
+                            ),
+                            temperature = 0f,
+                            topK = 1,
+                            maxTokens = 16,
+                            onText = {},
+                        )
+                    }
+                }
+                call.respond(mapOf(
+                    "model" to modelId,
+                    "status" to "warm",
+                    "engine_loaded" to true,
+                    "ms" to (System.nanoTime() - t0) / 1_000_000,
+                ))
+            } catch (_: TimeoutCancellationException) {
+                call.respond(
+                    io.ktor.http.HttpStatusCode.GatewayTimeout,
+                    mapOf(
+                        "model" to modelId,
+                        "status" to "timeout",
+                        "ms" to (System.nanoTime() - t0) / 1_000_000,
+                    ),
+                )
+            } catch (e: Throwable) {
+                LogManager.e("HealthRoute", "Nano warm-up failed for $modelId", e)
+                call.respond(
+                    io.ktor.http.HttpStatusCode.ServiceUnavailable,
+                    mapOf(
+                        "model" to modelId,
+                        "status" to "error",
+                        "error" to (e.message ?: e.javaClass.simpleName),
+                        "ms" to (System.nanoTime() - t0) / 1_000_000,
+                    ),
+                )
+            }
             return@post
         }
         try {
@@ -162,6 +233,7 @@ fun Route.healthRoute(
 private fun healthSnapshot(
     engineRegistry: EngineRegistry,
     appContext: Context,
+    nanoStatus: Int,
 ): Map<String, Any?> {
     val snapshot = engineRegistry.snapshot()
     // Engines with a fully-successful build attempt are proof of a live backend.
@@ -172,40 +244,73 @@ private fun healthSnapshot(
     val npuReady = okModelsFor("LITERT_NPU")
     val gpuReady = okModelsFor("LITERT_GPU")
     val cpuReady = okModelsFor("LITERT_CPU")
+    val nanoReady = nanoStatus == com.google.mlkit.genai.common.FeatureStatus.AVAILABLE
+    val selectedId = com.nickzam.server.Settings.selectedModelId(appContext)
+    val selected = findModelInfo(selectedId) ?: DEFAULT_MODEL
     val actualBackend = when {
         npuReady.isNotEmpty() -> "GOOGLE_TENSOR_NPU"
         gpuReady.isNotEmpty() -> "GPU_OPENCL"
         cpuReady.isNotEmpty() -> "CPU"
+        // The Nano lane runs inside AICore, so no engine ever caches here —
+        // the probe itself is the evidence when the selected model is hosted.
+        selected.hosted && nanoReady -> "AICORE"
         engineRegistry.lastLoadError != null -> "error"
         else -> "unknown"
     }
     // Per-catalog-model evidence: installed/loaded + declared + proven backend.
     val models = AVAILABLE_MODELS.map { info ->
-        val file = engineRegistry.modelFileFor(info)
-        val installed = file.exists()
-        val loaded = snapshot.any { it.cacheKey.startsWith("${info.id}_") }
-        mapOf(
-            "id" to info.id,
-            "declared_backend" to info.backend.name,
-            "installed" to installed,
-            "loaded" to loaded,
-            "backend_proven" to when {
-                info.id in npuReady -> "GOOGLE_TENSOR_NPU"
-                info.id in gpuReady -> "GPU_OPENCL"
-                info.id in cpuReady -> "CPU"
-                loaded -> "declared_${info.backend.name.lowercase()}"
-                else -> null
-            },
-            "size_bytes" to if (installed) file.length() else null,
-            "sha256_prefix" to info.sha256.take(16),
-            // Verified context limit only; null = unverified (see manifest).
-            "context_tokens" to info.contextTokens,
-        )
+        if (info.hosted) {
+            // Hosted (Gemini Nano via AICore): no file, no hash, no in-process
+            // engine — "installed" mirrors AICore's FeatureStatus.
+            mapOf(
+                "id" to info.id,
+                "declared_backend" to info.backend.name,
+                "hosted" to true,
+                "installed" to nanoReady,
+                "loaded" to nanoReady,
+                "backend_proven" to (if (nanoReady) "AICORE" else null),
+                "aicore_status" to when (nanoStatus) {
+                    com.google.mlkit.genai.common.FeatureStatus.AVAILABLE -> "available"
+                    com.google.mlkit.genai.common.FeatureStatus.DOWNLOADING -> "downloading"
+                    com.google.mlkit.genai.common.FeatureStatus.DOWNLOADABLE -> "downloadable"
+                    else -> "unavailable"
+                },
+                "size_bytes" to null,
+                "sha256_prefix" to null,
+                "context_tokens" to info.contextTokens,
+                "spec_capable" to false,
+                "spec_active" to false,
+            )
+        } else {
+            val file = engineRegistry.modelFileFor(info)
+            val installed = file.exists()
+            val loaded = snapshot.any { it.cacheKey.startsWith("${info.id}_") }
+            mapOf(
+                "id" to info.id,
+                "declared_backend" to info.backend.name,
+                "installed" to installed,
+                "loaded" to loaded,
+                "backend_proven" to when {
+                    info.id in npuReady -> "GOOGLE_TENSOR_NPU"
+                    info.id in gpuReady -> "GPU_OPENCL"
+                    info.id in cpuReady -> "CPU"
+                    loaded -> "declared_${info.backend.name.lowercase()}"
+                    else -> null
+                },
+                "size_bytes" to if (installed) file.length() else null,
+                "sha256_prefix" to info.sha256.take(16),
+                // Verified context limit only; null = unverified (see manifest).
+                "context_tokens" to info.contextTokens,
+                // Drafter support = catalog declaration AND a live engine built
+                // with the spec flag (engines with the other flag are evicted).
+                "spec_capable" to info.speculativeDecoding,
+                "spec_active" to (info.speculativeDecoding &&
+                    snapshot.any { it.cacheKey.startsWith("${info.id}_") && it.cacheKey.endsWith("_spec") }),
+            )
+        }
     }
-    val selectedId = com.nickzam.server.Settings.selectedModelId(appContext)
-    val selected = findModelInfo(selectedId) ?: AVAILABLE_MODELS.first()
     val selectedFile = engineRegistry.modelFileFor(selected)
-    val selectedInstalled = selectedFile.exists()
+    val selectedInstalled = if (selected.hosted) nanoReady else selectedFile.exists()
     val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         Build.SOC_MODEL ?: "unknown"
     } else "unknown"
@@ -215,7 +320,7 @@ private fun healthSnapshot(
     val thermal = runCatching { com.nickzam.server.ThermalMonitor.read(appContext) }.getOrNull()
     return mapOf(
         "status" to "ok",
-        "service" to "pixelunlockgpu-android",
+        "service" to "pixelserver-android",
         "version" to BuildConfig.VERSION_NAME,
         // Exposure of the API surface: loopback / tailscale (E2E encrypted) / lan.
         "access" to mapOf(
@@ -267,9 +372,10 @@ private fun healthSnapshot(
         "model" to mapOf(
             "id" to selected.id,
             "installed" to selectedInstalled,
-            "loaded" to snapshot.any { it.cacheKey.startsWith("${selected.id}_") },
-            "size_bytes" to if (selectedInstalled) selectedFile.length() else null,
-            "sha256_prefix" to selected.sha256.take(16),
+            "loaded" to if (selected.hosted) nanoReady
+                else snapshot.any { it.cacheKey.startsWith("${selected.id}_") },
+            "size_bytes" to if (selectedInstalled && !selected.hosted) selectedFile.length() else null,
+            "sha256_prefix" to if (selected.sha256.isEmpty()) null else selected.sha256.take(16),
             "context_tokens" to selected.contextTokens,
         ),
         "models" to models,
@@ -278,6 +384,9 @@ private fun healthSnapshot(
             "litert_version" to BuildConfig.LITERT_VERSION,
             "loaded_count" to engineRegistry.engineCount(),
             "last_load_error" to engineRegistry.lastLoadError,
+            // User opt-in for speculative decoding; only meaningful when the
+            // selected model's models[].spec_capable is true (see models[]).
+            "spec_decoding_setting" to com.nickzam.server.Settings.specDecoding(appContext),
         ),
         "engines" to snapshot.map { e ->
             mapOf(

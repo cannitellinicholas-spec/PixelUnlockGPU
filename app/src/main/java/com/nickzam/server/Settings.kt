@@ -36,6 +36,7 @@ object Settings {
     const val KEY_SELECTED_MODEL_ID = "selected_model_id"
     const val KEY_CONTEXT_TOKENS = "context_tokens"
     const val KEY_TAILSCALE = "tailscale"
+    const val KEY_SPEC_DECODING = "spec_decoding"
 
     const val DEFAULT_PORT = 8080
     const val DEFAULT_TEMPERATURE = 0.8f
@@ -103,6 +104,17 @@ object Settings {
     fun tailscale(context: Context): Boolean = prefs(context).getBoolean(KEY_TAILSCALE, false)
     fun setTailscale(context: Context, value: Boolean) =
         prefs(context).edit().putBoolean(KEY_TAILSCALE, value).apply()
+
+    /**
+     * Opt-in for speculative decoding on bundles that ship an MTP drafter
+     * (catalog flag `speculativeDecoding`). Off by default: the drafter
+     * costs extra RAM and its speedup is workload-dependent, so it's an
+     * explicit experiment, not a silent win.
+     */
+    fun specDecoding(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SPEC_DECODING, false)
+    fun setSpecDecoding(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_SPEC_DECODING, value).apply()
 
     fun accessMode(context: Context): AccessMode = when {
         tailscale(context) -> AccessMode.TAILSCALE

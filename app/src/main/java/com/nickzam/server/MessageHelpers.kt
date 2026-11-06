@@ -1,9 +1,17 @@
 package com.nickzam.server
 
+import com.google.gson.JsonElement
+
 /**
  * Pure, dependency-free helpers so that the non-trivial request-hashing
  * logic is independently testable on the JVM (no Android, no LiteRT-LM).
  */
+
+/** Parsed assistant `tool_calls` array (empty when absent/not-an-array). */
+fun Message.toolCallsList(): List<JsonElement> {
+    val tc = toolCalls ?: return emptyList()
+    return if (tc.isJsonArray) tc.asJsonArray.toList() else emptyList()
+}
 
 /**
  * Hash of `messages[0 until count]`. Used by

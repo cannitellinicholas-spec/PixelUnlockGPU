@@ -23,6 +23,51 @@ class ChatValidationTest {
         assertNull(ChatValidation.validate(base()))
     }
 
+    @Test fun `nano hosted model accepts plain text chat`() {
+        assertNull(ChatValidation.validate(
+            base().copy(model = NANO_FAST_MODEL_ID)))
+        assertNull(ChatValidation.validate(
+            base().copy(
+                model = NANO_FAST_MODEL_ID,
+                messages = listOf(msg("system", "Be brief"), msg("user", "Hi")),
+                stream = true,
+            )))
+    }
+
+    @Test fun `nano hosted model rejects tool declarations`() {
+        val f = ChatValidation.validate(
+            base().copy(model = NANO_FAST_MODEL_ID, tools = JsonParser.parseString("[{\"type\":\"function\"}]")))!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("unsupported_feature", f.type)
+        assertTrue(f.message.contains("AICore"))
+    }
+
+    @Test fun `nano hosted model rejects speculative decoding`() {
+        val f = ChatValidation.validate(
+            base().copy(model = NANO_FAST_MODEL_ID, speculativeDecoding = true))!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("unsupported_feature", f.type)
+    }
+
+    @Test fun `speculative decoding true on a drafter model passes`() {
+        assertNull(ChatValidation.validate(
+            base().copy(model = GPU_SPEC_MODEL_ID, speculativeDecoding = true)))
+    }
+
+    @Test fun `speculative decoding true on a drafter-less model is rejected`() {
+        val f = ChatValidation.validate(base().copy(speculativeDecoding = true))!!
+        assertEquals(400, f.httpStatus)
+        assertEquals("unsupported_feature", f.type)
+        assertTrue(f.message.contains(GPU_SPEC_MODEL_ID))
+    }
+
+    @Test fun `speculative decoding false or absent always passes`() {
+        assertNull(ChatValidation.validate(base().copy(speculativeDecoding = false)))
+        assertNull(ChatValidation.validate(base().copy(speculativeDecoding = null)))
+        assertNull(ChatValidation.validate(
+            base().copy(model = GPU_SPEC_MODEL_ID, speculativeDecoding = false)))
+    }
+
     @Test fun `valid request with system prompt and sampling passes`() {
         val req = base().copy(
             messages = listOf(msg("system", "Be brief"), msg("user", "Hi")),
@@ -186,5 +231,70 @@ class ChatValidationTest {
         assertNotNull(ChatValidation.validate(base().copy(maxTokens = ChatValidation.MAX_TOKENS_CEILING + 1)))
         assertNull(ChatValidation.validate(base().copy(maxTokens = 1)))
         assertNull(ChatValidation.validate(base().copy(maxTokens = ChatValidation.MAX_TOKENS_CEILING)))
+    }
+
+    // ---- Native tools relay (2026-10): declared tools unlock tool turns ----
+
+    private val toolSpecs = JsonParser.parseString(
+        """[{"type":"function","function":{"name":"web_search",
+            "parameters":{"type":"object","properties":{}}}}]""")
+
+    private fun toolCallMsg() = Message(
+        "assistant", null,
+        toolCalls = JsonParser.parseString(
+            """[{"id":"call_0","type":"function","function":
+                {"name":"web_search","arguments":"{\"query\":\"q\"}"}}]"""),
+    )
+
+    private fun toolResultMsg() = Message(
+        "tool", stringContent("result text"), toolCallId = "call_0",
+    )
+
+    @Test fun `with tools declared assistant tool_calls replay passes`() {
+        val req = base().copy(
+            tools = toolSpecs,
+            messages = listOf(msg("user", "weather?"), toolCallMsg(), toolResultMsg()),
+        )
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `tool result as final turn passes when tools declared`() {
+        val req = base().copy(
+            tools = toolSpecs,
+            messages = listOf(msg("user", "weather?"), toolCallMsg(), toolResultMsg()),
+        )
+        // The final message here IS the tool result (mid-loop continuation).
+        assertNull(ChatValidation.validate(req))
+    }
+
+    @Test fun `tool role without tools declaration still rejected`() {
+        val req = base().copy(messages = listOf(msg("user", "hi"), toolResultMsg()))
+        assertEquals("invalid_request_error", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `assistant tool_calls without declaration still rejected`() {
+        val req = base().copy(messages = listOf(msg("user", "hi"), toolCallMsg(), msg("user", "x")))
+        assertEquals("unsupported_feature", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `tool_calls on non-assistant message rejected even with tools`() {
+        val bad = Message("user", stringContent("x"),
+            toolCalls = JsonParser.parseString("""[{"id":"1"}]"""))
+        val req = base().copy(tools = toolSpecs, messages = listOf(msg("user", "hi"), bad))
+        assertEquals("invalid_request_error", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `tool_call_id on non-tool role rejected even with tools`() {
+        val bad = Message("user", stringContent("x"), toolCallId = "call_0")
+        val req = base().copy(tools = toolSpecs, messages = listOf(msg("user", "hi"), bad))
+        assertEquals("invalid_request_error", ChatValidation.validate(req)!!.type)
+    }
+
+    @Test fun `assistant null content with tool_calls is allowed with tools`() {
+        val req = base().copy(
+            tools = toolSpecs,
+            messages = listOf(msg("user", "hi"), toolCallMsg(), toolResultMsg()),
+        )
+        assertNull(ChatValidation.validate(req))
     }
 }

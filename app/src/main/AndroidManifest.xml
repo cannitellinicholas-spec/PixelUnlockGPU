@@ -8,6 +8,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Companion launcher visibility: "Back to Cadence" resolves
+         com.pixelgpu.chat's launch intent (package visibility on API 30+). -->
+    <queries>
+        <package android:name="com.pixelgpu.chat" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:largeHeap="true"
@@ -33,6 +39,23 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Headless server wake for other local apps (Cadence's nano->GPU
+             auto-fallback). No UI: starts the service and finishes. -->
+        <activity
+            android:name=".EngineWakeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.nickzam.server.action.ENSURE_SERVER" />
+                <!-- Implicit launches (action + package, no component)
+                     require DEFAULT; without it only explicit -n intents
+                     resolve (seen live 2026-10-05). -->
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 

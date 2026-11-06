@@ -13,5 +13,6 @@ import kotlinx.coroutines.sync.Mutex
 object ServiceLocator {
     @Volatile var engineRegistry: EngineRegistry? = null
     @Volatile var sessionManager: SessionManager? = null
+    @Volatile var nanoEngine: com.nickzam.server.inference.aicore.NanoEngine? = null
     @Volatile var inferenceMutex: Mutex? = null
 }

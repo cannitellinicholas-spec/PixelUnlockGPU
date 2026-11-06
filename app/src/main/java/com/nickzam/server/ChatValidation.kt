@@ -9,12 +9,11 @@ import com.google.gson.JsonElement
  * - `model` must equal a catalog ID exactly; unknown IDs fail explicitly
  *   (never mapped to "the selected model").
  * - Only system/user/assistant text messages, in order, ending in a user turn.
- * - `tools` declarations are accepted and ignored: the model can never emit
- *   `tool_calls`, so clients that always advertise tools (agent CLIs) still
- *   get plain-text generations. Forced `tool_choice` (anything but `"none"`,
- *   which the model honors trivially), tool follow-up turns, images, audio,
- *   multimodal parts, and `stop` remain rejected with explicit
- *   unsupported-feature errors — never silently ignored.
+ * - Text turns plus native tools relay: a declared `tools` array permits
+ *   assistant `tool_calls` replays and `role:"tool"` result turns; without it
+ *   those shapes are rejected with explicit unsupported-feature errors.
+ *   Forced `tool_choice`, images, audio, multimodal parts, and `stop` remain
+ *   rejected — never silently ignored.
  * - Sampling knobs are range-checked where the pinned engine implements them
  *   (temperature, top_p, top_k, max_tokens).
  */
@@ -46,41 +45,81 @@ object ChatValidation {
             return Failure(400, "invalid_request_error", "messages must not be empty")
         }
 
-        // Declared `tools` are accepted and ignored (like llama.cpp-family
-        // servers): the model can never emit tool_calls, so agent clients
-        // that always advertise tools (Grok Build CLI, etc.) still receive
-        // plain-text generations. What we DO reject is anything that forces
-        // or pretends a tool round-trip the model cannot honor.
+        // Tools are relayed natively now (LiteRT-LM tool binding, automatic
+        // tool calling off): a declared `tools` array unlocks assistant
+        // `tool_calls` replays and `role:"tool"` result turns, and the model
+        // may answer with real tool_calls. Without a declaration the server
+        // stays strict — a tool round-trip nobody offered is rejected, never
+        // silently ignored. Forced tool_choice is still rejected: honoring
+        // "must call tool X" needs server-side execution we don't do.
+        val toolsDeclared = isNonEmpty(req.tools)
+        // The hosted Nano lane (AICore Prompt API, beta4) has no tool
+        // surface at all — declaring tools there would promise a capability
+        // the model can never use, so reject explicitly, never silently.
+        if (toolsDeclared && findModelInfo(req.model)?.hosted == true) {
+            return Failure(400, "unsupported_feature",
+                "model '${req.model}' is served by AICore, which exposes no " +
+                    "tool-calling surface; use a LiteRT model for tool loops")
+        }
         if (isPresent(req.toolChoice) && !isTrivialToolChoice(req.toolChoice)) {
             return Failure(400, "unsupported_feature",
                 "tool_choice other than \"none\"/\"auto\" forces a tool call " +
-                    "this server can never produce")
+                    "this server cannot guarantee")
         }
         if (isNonEmpty(req.stop)) {
             return Failure(400, "unsupported_feature",
                 "stop sequences are not supported by the pinned inference engine")
         }
+        // Speculative decoding is a property of the bundle (MTP drafter
+        // section). Requesting it on a drafter-less model can never be
+        // honored — reject explicitly (never silently drop the request's
+        // intent). `false`/absent always passes; `true` on a drafter model
+        // is honored at engine level.
+        if (req.speculativeDecoding == true) {
+            val info = findModelInfo(req.model)
+            if (info != null && !info.speculativeDecoding) {
+                return Failure(400, "unsupported_feature",
+                    "model '${req.model}' has no MTP drafter section; " +
+                        "speculative_decoding requires \"${GPU_SPEC_MODEL_ID}\"")
+            }
+        }
 
         // Roles and content, in order.
         for ((i, m) in req.messages.withIndex()) {
-            if (m.role != "system" && m.role != "user" && m.role != "assistant") {
+            val roleOk = m.role == "system" || m.role == "user" || m.role == "assistant" ||
+                (m.role == "tool" && toolsDeclared)
+            if (!roleOk) {
                 return Failure(400, "invalid_request_error",
-                    "messages[$i]: unsupported role '${m.role}' (supported: system, user, assistant)")
+                    "messages[$i]: unsupported role '${m.role}' (supported: system, user, assistant" +
+                        (if (toolsDeclared) ", tool" else "") + ")")
             }
             if (isPresent(m.toolCalls)) {
-                return Failure(400, "unsupported_feature",
-                    "messages[$i]: tool_calls are not supported by this server")
+                if (!toolsDeclared) {
+                    return Failure(400, "unsupported_feature",
+                        "messages[$i]: tool_calls present without a tools declaration")
+                }
+                if (m.role != "assistant") {
+                    return Failure(400, "invalid_request_error",
+                        "messages[$i]: tool_calls are only allowed on assistant messages")
+                }
             }
             if (m.toolCallId != null) {
-                return Failure(400, "unsupported_feature",
-                    "messages[$i]: tool follow-up turns are not supported by this server")
+                if (!toolsDeclared) {
+                    return Failure(400, "unsupported_feature",
+                        "messages[$i]: tool follow-up turns without a tools declaration")
+                }
+                if (m.role != "tool") {
+                    return Failure(400, "invalid_request_error",
+                        "messages[$i]: tool_call_id is only allowed on tool messages")
+                }
             }
             val content = m.content
-            if (content == null || content.isJsonNull) {
+            val contentNull = content == null || content.isJsonNull
+            if (contentNull && !(m.role == "assistant" && isPresent(m.toolCalls))) {
                 return Failure(400, "invalid_request_error",
                     "messages[$i]: content must be a non-empty string or text parts")
             }
-            for (part in content.toContentParts()) {
+            for (part in content?.toContentParts().orEmpty()) {
                 when (part) {
                     is ContentPart.TextPart -> Unit
                     is ContentPart.ImagePart -> return Failure(400, "unsupported_feature",
@@ -89,7 +128,7 @@ object ChatValidation {
                         "messages[$i]: content type '${part.type}' is not supported by this server")
                 }
             }
-            if (content.isJsonArray && content.asJsonArray.size() > 0 && m.textChars() == 0 &&
+            if (content != null && content.isJsonArray && content.asJsonArray.size() > 0 && m.textChars() == 0 &&
                 content.toContentParts().isEmpty()
             ) {
                 return Failure(400, "invalid_request_error",
@@ -97,14 +136,17 @@ object ChatValidation {
             }
         }
 
-        // The last non-system message must be a user turn (what the engine sends).
+        // The last non-system message is what the engine sends: normally a
+        // user turn; a tool-result turn is equally valid mid tool-loop when
+        // tools are declared (the client is continuing a tool exchange).
         val nonSystem = req.messages.filter { it.role != "system" }
         if (nonSystem.isEmpty()) {
             return Failure(400, "invalid_request_error", "Request has no non-system messages")
         }
-        if (nonSystem.last().role != "user") {
+        val lastRole = nonSystem.last().role
+        if (lastRole != "user" && !(toolsDeclared && lastRole == "tool")) {
             return Failure(400, "invalid_request_error",
-                "Last message must have role=user (got '${nonSystem.last().role}')")
+                "Last message must have role=user (got '$lastRole')")
         }
 
         // Sampling ranges (LiteRT-LM SamplerConfig: topK Int, topP/temperature Double).

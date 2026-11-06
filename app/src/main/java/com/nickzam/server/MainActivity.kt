@@ -78,19 +78,27 @@ class MainActivity : ComponentActivity() {
         ) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        // Launched from Cadence's right-edge drawer ("Server settings")?
+        // Show a one-tap way back so nobody has to hunt through the launcher.
+        val fromCadence = intent?.getBooleanExtra(EXTRA_FROM_CADENCE, false) == true
         setContent {
             NickZamTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    NickZamScreen()
+                    NickZamScreen(fromCadence = fromCadence)
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_FROM_CADENCE = "com.nickzam.server.extra.FROM_CADENCE"
+        const val CADENCE_PACKAGE = "com.pixelgpu.chat"
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NickZamScreen() {
+private fun NickZamScreen(fromCadence: Boolean = false) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val status by ServerState.status.collectAsState()
@@ -103,12 +111,16 @@ private fun NickZamScreen() {
     val modelFile = remember(snapshot, model) {
         File(context.getExternalFilesDir(null), model.filename)
     }
-    val installed = model.filename in snapshot.existingModels
+    // Hosted models (Gemini Nano) have no local file; their "installed" state
+    // mirrors the live AICore probe, refreshed in the poll loop below.
+    var hostedReady by remember { mutableStateOf(false) }
+    val installed = if (model.hosted) hostedReady else model.filename in snapshot.existingModels
 
     var portText by remember { mutableStateOf(Settings.port(context).toString()) }
     var apiKeyText by remember { mutableStateOf(Settings.apiKey(context)) }
     var bindLan by remember { mutableStateOf(Settings.bindLan(context)) }
     var tailscaleOn by remember { mutableStateOf(Settings.tailscale(context)) }
+    var specOn by remember { mutableStateOf(Settings.specDecoding(context)) }
     val accessLabel by ServerState.accessLabel.collectAsState()
     var busy by remember { mutableStateOf<String?>(null) }
     var verifyNote by remember { mutableStateOf<String?>(null) }
@@ -174,6 +186,14 @@ private fun NickZamScreen() {
             }
             engineLoaded = (ServiceLocator.engineRegistry?.snapshot() ?: emptyList())
                 .any { it.cacheKey.startsWith("${model.id}_") }
+            if (model.hosted) {
+                // AICore owns the weights — refresh availability from the
+                // service instead of the engine registry / model dir.
+                hostedReady = withContext(Dispatchers.IO) {
+                    ServiceLocator.nanoEngine?.status() ==
+                        com.google.mlkit.genai.common.FeatureStatus.AVAILABLE
+                }
+            }
             kotlinx.coroutines.delay(1_500L)
             if (activeDownloads.isEmpty()) {
                 // Keep polling engine state lightly even with no downloads.
@@ -215,9 +235,27 @@ private fun NickZamScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("PixelUnlockGPU", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("PixelServer", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            if (fromCadence) {
+                // Only shown when Cadence launched us — a one-tap return.
+                OutlinedButton(
+                    onClick = {
+                        val back = context.packageManager
+                            .getLaunchIntentForPackage(MainActivity.CADENCE_PACKAGE)
+                        if (back != null) context.startActivity(back)
+                        (context as? android.app.Activity)?.finish()
+                    },
+                ) { Text("Back to Cadence") }
+            }
+        }
         Text(
-            "On-device Gemma · LiteRT-LM · OpenAI-compatible",
+            "On-device Gemma · LiteRT-LM + Gemini Nano (AICore) · OpenAI-compatible",
             style = MaterialTheme.typography.bodyMedium,
         )
 
@@ -333,9 +371,52 @@ private fun NickZamScreen() {
                         Backend.LITERT_NPU -> "Tensor G5 TPU (LITERT_NPU) · no fallback"
                         Backend.LITERT_GPU -> "OpenCL GPU delegate (LITERT_GPU) · no fallback"
                         Backend.LITERT_CPU -> "CPU (LITERT_CPU)"
+                        Backend.AICORE -> "AICore host service (Gemini Nano FAST) · no local weights"
                     }}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (model.hosted) {
+                    // ---- Hosted lane (Gemini Nano via AICore) ----
+                    Text(
+                        when {
+                            hostedReady -> "Available in AICore ✓"
+                            else -> "Not available in AICore — AICore owns the download " +
+                                "(its model may still be downloading, or open AICore settings)"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "FAST preference only — AICore's FULL preview bundle fails " +
+                            "inference on this firmware.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(model.licenseNotice, style = MaterialTheme.typography.bodySmall)
+                    if (verifyNote != null) {
+                        Text(verifyNote!!, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                val engine = ServiceLocator.nanoEngine
+                                if (engine == null) {
+                                    withContext(Dispatchers.Main) {
+                                        verifyNote = "Start the server first — the AICore client lives in the service"
+                                    }
+                                    return@launch
+                                }
+                                engine.invalidateStatusCache()
+                                val st = engine.status(ttlMs = 0)
+                                val reason = engine.unavailableReason(st)
+                                withContext(Dispatchers.Main) {
+                                    hostedReady = st == com.google.mlkit.genai.common.FeatureStatus.AVAILABLE
+                                    verifyNote = if (hostedReady) "AICore reports AVAILABLE ✓"
+                                        else "AICore: $reason"
+                                }
+                            }
+                        },
+                    ) { Text("Re-check AICore") }
+                } else {
                 SocBadgeRow(model)
                 Text(
                     when {
@@ -439,6 +520,7 @@ private fun NickZamScreen() {
                         enabled = engineLoaded,
                     ) { Text("Unload") }
                 }
+                }
             }
         }
 
@@ -539,6 +621,32 @@ private fun NickZamScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Speculative decoding")
+                        Text(
+                            "Drafts several tokens ahead and verifies them in one weight " +
+                                "pass, so decode can exceed one weight-read per token. Only " +
+                                "models with \"+ draft\" in the name support it — the flag " +
+                                "does nothing elsewhere. Costs extra RAM; the speedup depends " +
+                                "on how predictable the text is. Switching rebuilds the engine " +
+                                "on the next request.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = specOn,
+                        onCheckedChange = {
+                            specOn = it
+                            Settings.setSpecDecoding(context, it)
+                        },
+                    )
+                }
             }
         }
 

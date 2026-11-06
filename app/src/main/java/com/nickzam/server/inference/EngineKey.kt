@@ -18,12 +18,18 @@ import com.nickzam.server.Backend
  * @property maxTokens KV-cache budget passed to `EngineConfig.maxNumTokens`;
  *                     `null` means "let the model's bundle decide".
  * @property backend   Hardware backend declared in the catalog for this model.
+ * @property spec      Speculative-decoding opt-in. The flag is read once at
+ *                     engine init, so an engine built with it on is a
+ *                     different engine than one built without: it must not
+ *                     be cache-shared across the toggle.
  */
 data class EngineKey(
     val modelId: String,
     val maxTokens: Int?,   // null means "model default"
     val backend: Backend,
+    val spec: Boolean = false,
 ) {
     /** Stable string form used for logs and the `/health` `key` field. */
-    fun asString(): String = "${modelId}_${maxTokens ?: "model"}_${backend.name}"
+    fun asString(): String =
+        "${modelId}_${maxTokens ?: "model"}_${backend.name}${if (spec) "_spec" else ""}"
 }

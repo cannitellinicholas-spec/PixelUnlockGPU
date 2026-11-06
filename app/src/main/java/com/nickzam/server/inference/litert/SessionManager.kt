@@ -41,6 +41,12 @@ class SessionManager(private val registry: EngineRegistry) {
         val temperature: Float,
         val topK: Int,
         val topP: Float,
+        /** True when the conversation was created with client tools bound;
+         *  the route then relays emitted tool_calls instead of plain text. */
+        val hasTools: Boolean = false,
+        /** Fingerprint of the declared `tools` array the conversation was
+         *  built with; carried to commit() so the cache records it. */
+        val toolsFingerprint: String = "",
     ) {
         val isCached: Boolean get() = cacheKey != null
     }
@@ -54,6 +60,9 @@ class SessionManager(private val registry: EngineRegistry) {
         val prefixHash: Long,
         val seenCount: Int,
         val createdAt: Long,
+        /** Tools are bound at Conversation creation; reuse requires the same
+         *  declared-tools fingerprint the conversation was created with. */
+        val toolsFingerprint: String = "",
     )
 
     private val sessions = object : LruCache<String, CachedSession>(4) {
@@ -100,11 +109,36 @@ class SessionManager(private val registry: EngineRegistry) {
             throw IllegalArgumentException("Request has no non-system messages")
         }
         val last = nonSystem.last()
-        if (last.role != "user") {
-            throw IllegalArgumentException("Last message must have role=user")
+        if (last.role != "user" && last.role != "tool") {
+            throw IllegalArgumentException("Last message must have role=user or tool")
         }
-        val lastPrompt = LlmMessageConverter.apiToLlmMessage(last)
+        val toolNames = LlmMessageConverter.toolNameMap(req.messages)
+        val lastPrompt = LlmMessageConverter.apiToLlmMessage(last, toolNames)
         val prior = nonSystem.dropLast(1)
+
+        // Tools path: a declared, non-empty `tools` array binds providers at
+        // Conversation creation, and a replayed turn may inject multiple new
+        // messages (assistant tool_calls + tool result), which breaks the
+        // "exactly one new driving turn" invariant the KV-reuse paths rely
+        // on. Tool requests therefore always build a fresh conversation from
+        // the full history. Tool loops are short (the client relays and
+        // re-sends), so the lost KV reuse is a small price for correctness.
+        val toolsEl = req.tools?.takeIf {
+            (it.isJsonArray && it.asJsonArray.size() > 0) || it.isJsonObject
+        }
+        if (toolsEl != null) {
+            val providers = LlmMessageConverter.toolProviderFrom(toolsEl)
+            if (providers.isNotEmpty()) {
+                val conversation = createConversation(
+                    acquired, temperature, topK, topP, systemText, prior, providers)
+                val fp = toolsEl.toString()
+                return Resolved(
+                    conversation, lastPrompt, null, acquired.cacheKey,
+                    temperature, topK, topP,
+                    hasTools = true, toolsFingerprint = fp,
+                )
+            }
+        }
 
         // Auto-prefix path for clients that don't send session_id (TypingMind
         // and most OpenAI clients replay the full history every turn). The
@@ -195,6 +229,7 @@ class SessionManager(private val registry: EngineRegistry) {
         topP: Float,
         systemText: String?,
         prior: List<Message>,
+        toolProviders: List<com.google.ai.edge.litertlm.ToolProvider> = emptyList(),
     ): Conversation {
         purgeConversationsOnEngine(acquired.cacheKey)
         val conv = try {
@@ -205,6 +240,7 @@ class SessionManager(private val registry: EngineRegistry) {
                 topP = topP,
                 systemText = systemText,
                 initial = prior,
+                toolProviders = toolProviders,
             )
         } catch (e: Exception) {
             if (e.message?.contains("session already exists", ignoreCase = true) == true) {
@@ -238,6 +274,7 @@ class SessionManager(private val registry: EngineRegistry) {
             prefixHash = messagesPrefixHash(messages, messages.size),
             seenCount = messages.size,
             createdAt = sessions.get(cacheKey)?.createdAt ?: System.currentTimeMillis(),
+            toolsFingerprint = resolved.toolsFingerprint,
         ))
         registry.activeConversations[resolved.engineKey] = resolved.conversation
     }
