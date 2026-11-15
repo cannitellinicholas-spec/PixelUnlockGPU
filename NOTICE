@@ -35,11 +35,10 @@ Third-party attribution
 3. libLiteRtDispatch_GoogleTensor.so (redistributed binary, prebuilt)
    app/src/main/jniLibs/arm64-v8a/libLiteRtDispatch_GoogleTensor.so
    Copyright of the respective contributors of jegly/Box (Apache 2.0).
-   Byte-identical copies are shipped by both jegly/Box and
-   jmahatpure01/Box_with_API (SHA-256
-   5731f46e9ac6e016113524a7a15fe9feb7bb55e03a0ce1c1b9aee7d5aab46fad;
-   409,920 bytes), so the Apache 2.0 grant in Box's LICENSE covers this
-   redistribution. See docs/device-model-matrix.md section 7.
+   Extracted from the jegly/Box 3.5.6 release APK (SHA-256
+   f70125aaf8709c7b07b60c7ebd409a16789a5277c41dd5b3a74575827d7f7d39;
+   543,688 bytes), so the Apache 2.0 grant in Box's LICENSE covers this
+   redistribution. See docs/device-model-matrix.md section 4.
 
 4. Model weights (NOT redistributed)
    Gemma models are downloaded at runtime from Hugging Face by the user and

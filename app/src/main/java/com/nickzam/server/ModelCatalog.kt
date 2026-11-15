@@ -28,10 +28,10 @@ import android.os.Build
 enum class Backend { LITERT_CPU, LITERT_GPU, LITERT_NPU, AICORE }
 
 /**
- * Catalog ID of the Tensor G5 NPU bundle. The entry stays listed for a
- * future vendor-access path, but it is NOT the served default: its NPU
- * dispatch aborts on stock Android 17, so [DEFAULT_MODEL] resolves to
- * [GPU_MODEL_ID] instead.
+ * Catalog ID of the Tensor G5 NPU bundle. Loads and serves on stock
+ * Android 17 (Pixel 10 Pro XL, verified 2026-11-05). It is NOT the served
+ * default yet: [DEFAULT_MODEL] still resolves to [GPU_MODEL_ID] until the
+ * NPU path has been confirmed on more devices/builds.
  */
 const val STABLE_MODEL_ID = "gemma-4-e2b-it-tpu-g5"
 
@@ -182,10 +182,8 @@ val AVAILABLE_MODELS: List<ModelInfo> = listOf(
         name = "Gemma 4 E2B (Tensor G5)",
         description = "Instruction-tuned Gemma 4 E2B in LiteRT-LM format, served on the " +
             "Tensor G5 TPU via the bundled GoogleTensor dispatch library. ~3.1 GB. " +
-            "Pixel 10 only. NOTE: the TPU dispatch path aborts on stock " +
-            "Android 17 (needs /vendor/lib64/libedgetpu_litert.so, which an " +
-            "app linker namespace cannot see) — kept listed for a future " +
-            "vendor-access path; use the GPU entry for a working load.",
+            "Pixel 10 only. Fastest prefill and coolest-running option; " +
+            "temperature/top_k/top_p are ignored on this backend.",
         url = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm" +
             "/resolve/b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1/gemma-4-E2B-it_Google_Tensor_G5.litertlm",
         filename = "gemma-4-e2b-it-tpu-g5.litertlm",
@@ -294,9 +292,9 @@ val AVAILABLE_MODELS: List<ModelInfo> = listOf(
 
 /**
  * The catalog entry served by default when nothing has been selected: the
- * GPU bundle — the working, on-device-verified path on stock Tensor G5
- * firmware. ([STABLE_MODEL_ID]'s NPU bundle can never load there: its
- * dispatch aborts and the engine refuses it.)
+ * GPU bundle — the longest-verified path on stock Tensor G5 firmware. (The
+ * NPU bundle, [STABLE_MODEL_ID], also loads now; the default is unchanged
+ * until that path has wider device coverage.)
  */
 val DEFAULT_MODEL: ModelInfo get() = findModelInfo(GPU_MODEL_ID) ?: AVAILABLE_MODELS.first()
 

@@ -158,7 +158,7 @@ class ModelCatalogTest {
     }
 
     @Test fun `default selection is the GPU bundle`() {
-        // The NPU path aborts on stock G5 firmware, so the app defaults to GPU.
+        // GPU stays the default until the NPU path has wider device coverage.
         assertEquals(GPU_MODEL_ID, Settings.DEFAULT_MODEL_ID)
     }
 

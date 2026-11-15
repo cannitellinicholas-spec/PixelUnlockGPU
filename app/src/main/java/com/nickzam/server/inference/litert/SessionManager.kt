@@ -241,6 +241,7 @@ class SessionManager(private val registry: EngineRegistry) {
                 systemText = systemText,
                 initial = prior,
                 toolProviders = toolProviders,
+                npu = acquired.engine.backend == com.nickzam.server.Backend.LITERT_NPU,
             )
         } catch (e: Exception) {
             if (e.message?.contains("session already exists", ignoreCase = true) == true) {
