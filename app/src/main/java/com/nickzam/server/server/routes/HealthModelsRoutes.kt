@@ -187,6 +187,7 @@ fun Route.healthRoute(
                         topP = 1f,
                         systemText = null,
                         initial = emptyList(),
+                        npu = acquired.engine.backend == com.nickzam.server.Backend.LITERT_NPU,
                     )
                     try {
                         withContext(Dispatchers.Default) {

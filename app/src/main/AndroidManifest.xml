@@ -33,6 +33,20 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
 
+        <!-- Same restriction for the Tensor TPU (NPU backend): the GoogleTensor
+             dispatch library dlopens libedgetpu_litert.so by soname, and its
+             dependency chain resolves in the vendor namespace. All six are
+             listed in /vendor/etc/public.libraries.txt on Pixel 10
+             (Android 17), i.e. they are meant to be app-loadable — but only
+             when declared. required="false" keeps installs working on
+             devices that lack them. -->
+        <uses-native-library android:name="libedgetpu_litert.so" android:required="false" />
+        <uses-native-library android:name="libedgetpu_client.google.so" android:required="false" />
+        <uses-native-library android:name="libedgetpu_tachyon.google.so" android:required="false" />
+        <uses-native-library android:name="libedgetpu_util.so" android:required="false" />
+        <uses-native-library android:name="lib_aion_buffer.so" android:required="false" />
+        <uses-native-library android:name="libgxp.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

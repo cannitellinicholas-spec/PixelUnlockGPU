@@ -198,24 +198,12 @@ class EngineRegistry(
                     throw IllegalStateException(msg)
                 }
             }
-            // On this app's target device (Pixel 10 / Tensor G5) an NPU
-            // engine build ABORTS the process: the bundled
-            // libLiteRtDispatch_GoogleTensor.so requires
-            // /vendor/lib64/libedgetpu_litert.so, which is invisible to an
-            // app linker namespace, and LiteRT calls abort() rather than
-            // throwing ("No usable Dispatch runtime found"). The failure
-            // happens natively, before anything can catch it, so the only
-            // safe behavior is to refuse NPU builds outright. The entry
-            // stays listed; the GPU catalog entry is the working path.
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
-                android.os.Build.SOC_MODEL?.lowercase()?.contains("tensor g5") == true
-            ) {
-                val msg = "Model '${info.id}' targets the Tensor G5 TPU, but the NPU " +
-                    "delegate is not loadable from an app on stock firmware (vendor " +
-                    "TPU library inaccessible). Use the GPU model instead."
-                recordLoadError(msg)
-                throw IllegalStateException(msg)
-            }
+            // Tensor G5 (Pixel 10) NPU builds used to be refused here. They
+            // load on stock Android 17 once (a) the manifest declares the
+            // vendor edgetpu libraries with <uses-native-library> and (b) the
+            // bundled dispatch library is the self-contained Box 3.5.6 build
+            // — see docs/device-model-matrix.md. Verified on a Pixel 10 Pro
+            // XL (mustang, CP3A.261005.005).
         }
 
         // SHA-256 before load (memoized by path+size+mtime). Fail-closed.

@@ -80,9 +80,9 @@ The top-level `model` object tracks the model **selected in the app**
 Force-load the engine and run a 1-token generation (60s budget) so scripts
 can wait for first-token-ready. `model` defaults to the model selected in
 the app; unknown IDs return 400. Response: `{model, status: warm|timeout|error, ms, …}`.
-On Tensor G5 devices, NPU-backend models return `status: "error"` with a
-refusal message (the delegate is not loadable from an app on stock
-firmware); the process stays alive and any loaded GPU engine keeps serving.
+NPU-backend models warm like any other on Tensor G5 (the delegate loads on
+stock firmware — see `docs/device-model-matrix.md`). Sampling parameters
+(`temperature`, `top_k`, `top_p`) are accepted but ignored on NPU models.
 
 For the hosted `gemini-nano-fast` entry there is no engine to build: warm
 means the AICore probe is AVAILABLE and one short generation comes back.

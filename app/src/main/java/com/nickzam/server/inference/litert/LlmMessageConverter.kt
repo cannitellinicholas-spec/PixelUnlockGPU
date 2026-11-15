@@ -179,6 +179,14 @@ object LlmMessageConverter {
      * halts on tool_calls and the HTTP route relays them to the client,
      * which executes the tool and replays the conversation with a tool
      * result. Without tools the behavior is the classic text-only path.
+     *
+     * With [npu] true the conversation is created with a null
+     * `SamplerConfig`. The NPU executor samples inside the compiled model;
+     * handing it an external sampler makes every turn fail with
+     * `new_step must be <= TokenCount(), got N+1 vs N`
+     * (llm_litert_npu_compiled_model_executor.cc). Box does the same for its
+     * NPU/TPU accelerator. Consequence: temperature/top_k/top_p are ignored
+     * on NPU models.
      */
     fun createConversation(
         engine: LiteRtNativeEngine,
@@ -188,6 +196,7 @@ object LlmMessageConverter {
         systemText: String?,
         initial: List<Message>,
         toolProviders: List<ToolProvider> = emptyList(),
+        npu: Boolean = false,
     ): Conversation {
         val systemInstruction = systemText?.takeIf { it.isNotBlank() }?.let { Contents.of(it) }
         val toolNames = toolNameMap(initial)
@@ -196,7 +205,7 @@ object LlmMessageConverter {
             systemInstruction,
             priorMessages,
             /*tools=*/ toolProviders,
-            SamplerConfig(topK, topP.toDouble(), temperature.toDouble(), /*seed=*/ 0),
+            if (npu) null else SamplerConfig(topK, topP.toDouble(), temperature.toDouble(), /*seed=*/ 0),
             /*automaticToolCalling=*/ false,
         )
         return engine.createConversation(cfg)

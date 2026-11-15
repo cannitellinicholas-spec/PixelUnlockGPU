@@ -32,15 +32,29 @@ Catalog additions after the original Gate 0 audit:
   keeps vendor public libraries out of the app namespace unless declared,
   and the delegate fails `Can not find OpenCL library on this device`
   without it. Verified on-device 2026-10-01 (`GPU_OPENCL` in
-  `/health`, chat works). Added because the Tensor G5 NPU dispatch plugin
-  SIGABRTs on stock Android 17 (needs
-  `/vendor/lib64/libedgetpu_litert.so`, invisible to app linker
-  namespaces and undeclarable as a public vendor lib) — see section on the
-  NPU crash. The Tensor JNI NPU-warmup primer is skipped on G5 for the
-  same reason. `EngineRegistry.acquire()` now refuses NPU builds outright
-  on Tensor G5 with a clean `last_load_error` ("… Use the GPU model
-  instead.") so selecting the NPU entry and pressing Load cannot abort the
-  process.
+  `/health`, chat works).
+- **NPU on Tensor G5 works on stock Android 17** (Pixel 10 Pro XL
+  `mustang`, `CP3A.261005.005`, verified 2026-11-05; `/health` reports
+  `GOOGLE_TENSOR_NPU`, chat works). The earlier SIGABRT ("No usable
+  Dispatch runtime found") had three causes, none of them firmware:
+  1. The vendor TPU libraries are public (`/vendor/etc/public.libraries.txt`)
+     but, exactly like OpenCL above, invisible to an app namespace until
+     declared. The manifest now declares `libedgetpu_litert.so`,
+     `libedgetpu_client.google.so`, `libedgetpu_tachyon.google.so`,
+     `libedgetpu_util.so`, `lib_aion_buffer.so` and `libgxp.so`
+     (`required="false"`).
+  2. The previously bundled dispatch library (409,920 bytes) imports seven
+     `LiteRtGetDarwinn*@VERS_1.0` symbols that no public LiteRT/LiteRT-LM
+     release exports, so it could never link. Replaced with the
+     self-contained build shipped in the Box 3.5.6 APK (section 4).
+  3. With a non-null `SamplerConfig` the NPU executor fails every turn with
+     `new_step must be <= TokenCount(), got N+1 vs N`. NPU conversations are
+     now created with `samplerConfig = null` (what Box does), so sampling
+     parameters are ignored on NPU models.
+  The `EngineRegistry.acquire()` refusal on Tensor G5 is removed. The Tensor
+  JNI NPU-warmup primer is still skipped on G5 (it was never needed there).
+  Known issue: a request carrying `max_tokens` can wedge the NPU
+  conversation ("stuck conversation; evicted"); not yet root-caused.
 
 Evidence labels (used across issues, commits, and test reports):
 
@@ -116,7 +130,7 @@ temperature, seed)`). If Gate 1 shows the artifact will not init under
 
 | File | SHA-256 | Origin |
 |---|---|---|
-| `libLiteRtDispatch_GoogleTensor.so` (409,920 bytes) | `5731f46e9ac6e016113524a7a15fe9feb7bb55e03a0ce1c1b9aee7d5aab46fad` | **Byte-identical** in localLLM (`761bc94`) and Box_with_API (`fe6485c`) — origin unambiguous |
+| `libLiteRtDispatch_GoogleTensor.so` (543,688 bytes) | `f70125aaf8709c7b07b60c7ebd409a16789a5277c41dd5b3a74575827d7f7d39` | Extracted from the Box 3.5.6 release APK (`lib/arm64-v8a/`). Self-contained: no `libLiteRt.so` dependency, no `LiteRtGetDarwinn*` imports. Replaces the 409,920-byte build (`5731f46e…`, byte-identical in localLLM `761bc94` and Box_with_API `fe6485c`), which cannot link against any public LiteRT runtime. |
 
 Box additionally ships Qualcomm/MediaTek dispatch + compiler plugins and QNN
 libraries; PixelServer ports only the GoogleTensor dispatch lib (single-SoC
@@ -180,7 +194,7 @@ GPU model through a different compiler.
 | Catalog | `Backend.LITERT_NPU`, SoC marker `tensor g5` |
 | Engine build | `Backend.NPU(context.applicationInfo.nativeLibraryDir)` |
 | EngineConfig | `(modelPath, NPU, vision=null, audio=null, maxNumTokens, null, null)` — text-only MVP (Box uses GPU vision / CPU audio; localLLM uses CPU vision) |
-| Conversation | `ConversationConfig(system, prior, tools=[], SamplerConfig(topK, topP, temp, seed=0), autoTools=false)` |
+| Conversation | `ConversationConfig(system, prior, tools=[], samplerConfig=null, autoTools=false)` on NPU; `SamplerConfig(topK, topP, temp, seed=0)` on GPU/CPU |
 | Streaming | `sendMessageAsync(prompt, {}) → Flow<Message>` (cumulative text; deltas forwarded) |
 | Blocking | `sendMessage(prompt, {})` |
 | Cancel/cleanup | `cancelProcess()`; `conversation.close()` before `engine.close()` |
